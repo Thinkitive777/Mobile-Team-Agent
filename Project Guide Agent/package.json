@@ -1,0 +1,33 @@
+{
+  "name": "project-guide-agent",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "bin": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "build": "pkg . --out-path dist/",
+    "build-zip": "zip -r projectguide-agent.zip dist/ install.sh install.bat agent_prompt.md index.js package.json README.md",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "pkg": {
+    "assets": [],
+    "targets": [
+      "node18-macos-x64",
+      "node18-win-x64",
+      "node18-linux-x64"
+    ]
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "dotenv": "^17.3.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  }
+}
