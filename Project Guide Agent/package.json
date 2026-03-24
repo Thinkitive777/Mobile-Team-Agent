@@ -7,15 +7,19 @@
   "scripts": {
     "start": "node index.js",
     "build": "pkg . --out-path dist/",
-    "build-zip": "zip -r projectguide-agent.zip dist/ install.sh install.bat agent_prompt.md index.js jira-client.js git-utils.js report-manager.js constants.js errors.js logger.js validators.js package.json README.md .env.example",
+    "build:all": "pkg . --out-path dist/ -t node18-macos-x64,node18-macos-arm64,node18-win-x64,node18-linux-x64,node18-linux-arm64",
+    "build:dist": "npm run build:all && npm run zip",
+    "zip": "cd .. && zip -r projectguide-agent-dist.zip 'Project Guide Agent'/dist/ 'Project Guide Agent'/install.sh 'Project Guide Agent'/install.bat 'Project Guide Agent'/uninstall.sh 'Project Guide Agent'/uninstall.bat 'Project Guide Agent'/invoke 'Project Guide Agent'/invoke.bat 'Project Guide Agent'/agent_prompt.md 'Project Guide Agent'/index.js 'Project Guide Agent'/jira-client.js 'Project Guide Agent'/git-utils.js 'Project Guide Agent'/report-manager.js 'Project Guide Agent'/constants.js 'Project Guide Agent'/errors.js 'Project Guide Agent'/logger.js 'Project Guide Agent'/validators.js 'Project Guide Agent'/package.json 'Project Guide Agent'/package-lock.json 'Project Guide Agent'/.env.example CLAUDE.md README.md install.sh install.bat uninstall.sh uninstall.bat",
     "validate": "node -c index.js && node -c jira-client.js && node -c git-utils.js && node -c report-manager.js && node -c constants.js && node -c errors.js && node -c logger.js && node -c validators.js && echo 'All files valid'"
   },
   "pkg": {
     "assets": [],
     "targets": [
       "node18-macos-x64",
+      "node18-macos-arm64",
       "node18-win-x64",
-      "node18-linux-x64"
+      "node18-linux-x64",
+      "node18-linux-arm64"
     ]
   },
   "keywords": ["jira", "git", "developer-assistant", "automation", "mcp", "standup", "reporting"],
