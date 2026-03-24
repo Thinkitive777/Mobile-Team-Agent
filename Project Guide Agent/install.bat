@@ -28,7 +28,7 @@ claude mcp remove projectguide-agent >nul 2>&1
 claude mcp add projectguide-agent -- "%INSTALL_DIR%\%BINARY_NAME%"
 
 if %ERRORLEVEL% equ 0 (
-    echo ✨ Success! You can now use: claude invoke projectguide-agent
+    echo ✨ Success! You can now use the Project Guide Agent by running 'claude' and saying 'Good morning' or 'invoke projectguide-agent'.
 ) else (
     echo ⚠️  Note: Registration might have failed.
     echo    Please run: claude mcp add projectguide-agent -- "%INSTALL_DIR%\%BINARY_NAME%"

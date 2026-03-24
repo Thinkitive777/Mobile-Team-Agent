@@ -36,8 +36,7 @@ install.bat
 ```
 
 ### 3. Automatic Registration
-The installer will automatically register the agent with your **Claude CLI**. You'll see a success message:
-`✨ Success! You can now use: claude invoke projectguide-agent`
+The installer will automatically register the agent with your **Claude CLI**. You'll see a success message confirming the agent is connected.
 
 ---
 
@@ -57,8 +56,12 @@ On startup, call 'invoke_projectguide' to check setup status and summarize tasks
 ### Start the Agent
 From any project directory, simply run:
 ```bash
-claude invoke projectguide-agent
+claude
 ```
+The Project Guide Agent's tools are automatically loaded. You can activate the specific agent persona by saying:
+- "invoke projectguide-agent"
+- "Good morning"
+- "Tell me what to do"
 
 ### Common Commands
 - **Connect Tools**: "Connect Jira" or "Setup GitHub".
