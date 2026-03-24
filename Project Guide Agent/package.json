@@ -1,13 +1,13 @@
 {
   "name": "project-guide-agent",
-  "version": "1.0.0",
-  "description": "",
+  "version": "2.0.0",
+  "description": "Intelligent developer assistant with Jira + Git integration and daily workflow automation",
   "main": "index.js",
   "bin": "index.js",
   "scripts": {
     "start": "node index.js",
     "build": "pkg . --out-path dist/",
-    "build-zip": "zip -r projectguide-agent.zip dist/ install.sh install.bat agent_prompt.md index.js package.json README.md",
+    "build-zip": "zip -r projectguide-agent.zip dist/ install.sh install.bat agent_prompt.md index.js jira-client.js git-utils.js report-manager.js package.json README.md",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "pkg": {
@@ -18,8 +18,8 @@
       "node18-linux-x64"
     ]
   },
-  "keywords": [],
-  "author": "",
+  "keywords": ["jira", "git", "developer-assistant", "automation", "mcp"],
+  "author": "ProjectGuide Team",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
@@ -29,5 +29,8 @@
   },
   "devDependencies": {
     "pkg": "^5.8.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
