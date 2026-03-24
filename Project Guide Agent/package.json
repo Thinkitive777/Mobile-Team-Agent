@@ -1,14 +1,14 @@
 {
   "name": "project-guide-agent",
-  "version": "2.0.0",
-  "description": "Intelligent developer assistant with Jira + Git integration and daily workflow automation",
+  "version": "2.1.0",
+  "description": "Production-ready developer assistant with Jira + Git integration, daily automation, and intelligent workflow management",
   "main": "index.js",
   "bin": "index.js",
   "scripts": {
     "start": "node index.js",
     "build": "pkg . --out-path dist/",
-    "build-zip": "zip -r projectguide-agent.zip dist/ install.sh install.bat agent_prompt.md index.js jira-client.js git-utils.js report-manager.js package.json README.md",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build-zip": "zip -r projectguide-agent.zip dist/ install.sh install.bat agent_prompt.md index.js jira-client.js git-utils.js report-manager.js constants.js errors.js logger.js validators.js package.json README.md .env.example",
+    "validate": "node -c index.js && node -c jira-client.js && node -c git-utils.js && node -c report-manager.js && node -c constants.js && node -c errors.js && node -c logger.js && node -c validators.js && echo 'All files valid'"
   },
   "pkg": {
     "assets": [],
@@ -18,7 +18,7 @@
       "node18-linux-x64"
     ]
   },
-  "keywords": ["jira", "git", "developer-assistant", "automation", "mcp"],
+  "keywords": ["jira", "git", "developer-assistant", "automation", "mcp", "standup", "reporting"],
   "author": "ProjectGuide Team",
   "license": "ISC",
   "type": "commonjs",

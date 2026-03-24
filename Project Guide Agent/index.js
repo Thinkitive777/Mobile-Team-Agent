@@ -9,41 +9,48 @@ const path = require("path");
 const os = require("os");
 require("dotenv").config();
 
-// Import helpers
-const JiraClient = require("./jira-client.js");
-const GitUtils = require("./git-utils.js");
-const ReportManager = require("./report-manager.js");
+// Internal modules
+const CONST = require("./constants");
+const Logger = require("./logger");
+const { AppError, ConfigError, ValidationError } = require("./errors");
+const { validate, ticketKeySchema, dateSchema, serviceSchema, jiraUrlSchema, emailSchema } = require("./validators");
+const JiraClient = require("./jira-client");
+const GitUtils = require("./git-utils");
+const ReportManager = require("./report-manager");
 
-const CONFIG_DIR = path.join(os.homedir(), ".projectguide-agent");
-const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
+// ── Config ──────────────────────────────────────────────────────────────
 
-// Ensure config directory exists
-if (!fs.existsSync(CONFIG_DIR)) {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+if (!fs.existsSync(CONST.CONFIG_DIR)) {
+  fs.mkdirSync(CONST.CONFIG_DIR, { recursive: true, mode: 0o700 });
 }
 
-// Load or initialize config
 let config = {
   jira: { connected: false, url: null, email: null, token: null },
   github: { connected: false, token: null, user: null, repo: null },
   developer_mode: false,
 };
 
-if (fs.existsSync(CONFIG_FILE)) {
+if (fs.existsSync(CONST.CONFIG_FILE)) {
   try {
-    config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
+    config = JSON.parse(fs.readFileSync(CONST.CONFIG_FILE, "utf-8"));
   } catch (e) {
-    console.error("Error loading config:", e);
+    Logger.error("Config file corrupted, using defaults", { error: e.message });
   }
 }
 
 function saveConfig() {
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+  try {
+    fs.writeFileSync(CONST.CONFIG_FILE, JSON.stringify(config, null, 2), {
+      mode: CONST.CONFIG_FILE_PERMISSIONS,
+    });
+  } catch (err) {
+    Logger.error("Failed to save config", { error: err.message });
+    throw new ConfigError("Failed to save configuration: " + err.message);
+  }
 }
 
 function maskToken(token) {
-  if (!token || token === "********") return "tok_****";
-  if (token.length <= 4) return "tok_****";
+  if (!token || token === "********" || token.length <= 4) return "tok_****";
   return `tok_****${token.slice(-4)}`;
 }
 
@@ -53,610 +60,807 @@ function getJiraClient() {
   const token = process.env.JIRA_TOKEN || config.jira.token;
 
   if (!url || !email || !token) {
-    throw new Error("Jira not configured. Please provide JIRA_URL, JIRA_EMAIL, and JIRA_TOKEN.");
+    throw new ConfigError(
+      "Jira not configured. Set JIRA_URL, JIRA_EMAIL, JIRA_TOKEN as env vars or use configure_service."
+    );
   }
-
   return new JiraClient(url, email, token);
 }
 
+function getRepoPath() {
+  return process.env.REPO_PATH || process.cwd();
+}
+
+// Helper to build error response
+function errorResponse(msg) {
+  return { content: [{ type: "text", text: msg }], isError: true };
+}
+function textResponse(msg) {
+  return { content: [{ type: "text", text: msg }] };
+}
+
+// Helper to detect if a ticket is blocked via issue links
+function isTicketBlocked(ticket) {
+  const nameBlocked = (ticket.summary + ' ' + ticket.status).toLowerCase().includes('blocked');
+  const labelBlocked = (ticket.labels || []).some(l => l.toLowerCase() === 'blocked');
+  const linkBlocked = (ticket.issueLinks || []).some(link =>
+    link.description?.toLowerCase().includes('is blocked by') &&
+    link.linkedStatus !== 'Done'
+  );
+  return nameBlocked || labelBlocked || linkBlocked;
+}
+
+// ── MCP Server ──────────────────────────────────────────────────────────
+
 const server = new Server(
-  {
-    name: "projectguide-agent",
-    version: "2.0.0",
-  },
-  {
-    capabilities: {
-      tools: {},
-    },
-  }
+  { name: "projectguide-agent", version: CONST.VERSION },
+  { capabilities: { tools: {} } }
 );
 
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: [
-      // Setup and status
-      {
-        name: "get_setup_status",
-        description: "Check connection status for Jira and GitHub. Suggests next setup steps.",
-        inputSchema: { type: "object", properties: {} },
-      },
-      {
-        name: "configure_service",
-        description: "Configure Jira or GitHub. For Jira: requires url, email, token. For GitHub: requires token, user, repo.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            service: { type: "string", enum: ["jira", "github"] },
-            url: { type: "string", description: "Jira instance URL (Jira only)" },
-            email: { type: "string", description: "Jira email address (Jira only)" },
-            token: { type: "string", description: "API token or access token" },
-            user: { type: "string", description: "GitHub username (GitHub only)" },
-            repo: { type: "string", description: "GitHub repo path like owner/repo (GitHub only)" },
-          },
-          required: ["service", "token"],
-        },
-      },
+// ── Tool definitions ────────────────────────────────────────────────────
 
-      // Jira tools
-      {
-        name: "jira_connection_test",
-        description: "Test Jira connection by fetching current user info.",
-        inputSchema: { type: "object", properties: {} },
-      },
-      {
-        name: "fetch_jira_tickets",
-        description: "Fetch Jira tickets with filters. Supports: assignee, status, sprint, updated date range.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            assignee: { type: "string", description: "Filter by assignee (email or 'currentUser')" },
-            status: { type: "string", description: "Comma-separated statuses (e.g., 'To Do,In Progress,Done')" },
-            sprint: { type: "string", description: "Sprint name to filter by" },
-            updated_since: { type: "string", description: "Filter by updated date (e.g., '-7d', '2026-03-24')" },
-          },
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [
+    // ── Setup ──
+    {
+      name: "get_setup_status",
+      description: "Check connection status for all integrations and suggest setup steps.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "configure_service",
+      description: "Configure Jira or GitHub. Jira requires url, email, token. GitHub requires token.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          service: { type: "string", enum: ["jira", "github"] },
+          url: { type: "string", description: "Jira instance URL (Jira only)" },
+          email: { type: "string", description: "Jira email (Jira only)" },
+          token: { type: "string", description: "API token" },
+          user: { type: "string", description: "GitHub username" },
+          repo: { type: "string", description: "GitHub repo (owner/repo)" },
         },
+        required: ["service", "token"],
       },
-      {
-        name: "get_ticket_details",
-        description: "Get full details of a Jira ticket including comments, subtasks, and history.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            ticket_key: { type: "string", description: "Jira ticket key (e.g., 'PROJ-123')" },
-          },
-          required: ["ticket_key"],
-        },
-      },
-      {
-        name: "analyze_workload",
-        description: "Analyze all assigned tickets and categorize them (Done/In Progress/Not Started/Blocked/Overdue).",
-        inputSchema: { type: "object", properties: {} },
-      },
+    },
 
-      // Git tools
-      {
-        name: "get_recent_commits",
-        description: "Fetch recent commits from git (default: last 48 hours). Extracts linked Jira tickets.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            since: { type: "string", description: "Time period (e.g., '48 hours ago', '7 days ago')" },
-          },
+    // ── Jira ──
+    {
+      name: "jira_connection_test",
+      description: "Validate Jira credentials and return current user info.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "fetch_jira_tickets",
+      description: "Search Jira tickets with JQL filters: assignee, status, sprint, updated date range.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          assignee: { type: "string", description: "Filter by assignee (or 'currentUser')" },
+          status: { type: "string", description: "Comma-separated statuses (e.g. 'To Do,In Progress')" },
+          sprint: { type: "string", description: "Sprint name" },
+          updated_since: { type: "string", description: "Updated since (e.g. '-7d')" },
+          jql: { type: "string", description: "Raw JQL query (overrides other filters)" },
         },
       },
+    },
+    {
+      name: "get_ticket_details",
+      description: "Full Jira ticket details: description, comments, subtasks, linked issues, status history.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ticket_key: { type: "string", description: "Jira ticket key (e.g. PROJ-123)" },
+        },
+        required: ["ticket_key"],
+      },
+    },
+    {
+      name: "analyze_workload",
+      description: "Categorize all assigned tickets: Done, In Progress, Not Started, Blocked, Overdue. Includes smart blocker detection via issue links.",
+      inputSchema: { type: "object", properties: {} },
+    },
 
-      // Automation tools
-      {
-        name: "morning_standup",
-        description: "Generate morning standup: fetches pending/in-progress tickets and recent commits, then creates a daily plan.",
-        inputSchema: { type: "object", properties: {} },
-      },
-      {
-        name: "end_of_day_report",
-        description: "Generate and save end-of-day report. Saves to ~/.projectguide-agent/daily-reports/YYYY-MM-DD.md",
-        inputSchema: {
-          type: "object",
-          properties: {
-            date: { type: "string", description: "Date for report (default: today). Format: YYYY-MM-DD" },
-          },
+    // ── Git ──
+    {
+      name: "get_recent_commits",
+      description: "Fetch recent git commits with automatic Jira ticket linking.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          since: { type: "string", description: "Time period (default: '48 hours ago')" },
         },
       },
+    },
 
-      // Report tools
-      {
-        name: "get_daily_report",
-        description: "Retrieve a saved daily report by date.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            date: { type: "string", description: "Report date in YYYY-MM-DD format" },
-          },
-          required: ["date"],
+    // ── Automation ──
+    {
+      name: "morning_standup",
+      description: "Generate morning standup: pending tickets, recent commits, prioritized daily plan. Works even if Jira is unavailable (falls back to Git data).",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "end_of_day_report",
+      description: "Generate, save, and display end-of-day report. Includes carry-forward from yesterday.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          date: { type: "string", description: "Report date (default: today, YYYY-MM-DD)" },
         },
       },
-      {
-        name: "list_daily_reports",
-        description: "List all saved daily reports, optionally filtered by date range.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            start_date: { type: "string", description: "Start date (YYYY-MM-DD)" },
-            end_date: { type: "string", description: "End date (YYYY-MM-DD)" },
-          },
-        },
-      },
+    },
 
-      // Legacy tools (for backward compatibility)
-      {
-        name: "run_skill",
-        description: "Execute a specialized skill (e.g., developer-mode, file-info).",
-        inputSchema: {
-          type: "object",
-          properties: {
-            skill: { type: "string", description: "The skill to run" },
-            args: { type: "string", description: "Arguments for the skill" },
-          },
-          required: ["skill"],
+    // ── Reports ──
+    {
+      name: "get_daily_report",
+      description: "Retrieve a previously saved daily report by date.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          date: { type: "string", description: "YYYY-MM-DD" },
+        },
+        required: ["date"],
+      },
+    },
+    {
+      name: "list_daily_reports",
+      description: "List all saved daily reports with optional date range.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          start_date: { type: "string", description: "Start (YYYY-MM-DD)" },
+          end_date: { type: "string", description: "End (YYYY-MM-DD)" },
         },
       },
-      {
-        name: "invoke_projectguide",
-        description: "Activate the Project Guide Agent. Use this to start fresh.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            reason: { type: "string", description: "Reason for invocation" },
-          },
+    },
+    {
+      name: "weekly_summary",
+      description: "Generate a weekly summary aggregating daily reports (last 7 days or ending at a specified date).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          end_date: { type: "string", description: "Week ending date (default: today)" },
         },
       },
-    ],
-  };
-});
+    },
+
+    // ── Operations ──
+    {
+      name: "health_check",
+      description: "Check health of all integrations: Jira connectivity, Git availability, report storage.",
+      inputSchema: { type: "object", properties: {} },
+    },
+
+    // ── Legacy ──
+    {
+      name: "run_skill",
+      description: "Execute a skill: developer-mode, file-info.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          skill: { type: "string" },
+          args: { type: "string" },
+        },
+        required: ["skill"],
+      },
+    },
+    {
+      name: "invoke_projectguide",
+      description: "Activate the Project Guide Agent. Shows setup status and next steps.",
+      inputSchema: {
+        type: "object",
+        properties: { reason: { type: "string" } },
+      },
+    },
+  ],
+}));
+
+// ── Tool handlers ───────────────────────────────────────────────────────
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+  const { name, arguments: args = {} } = request.params;
+  Logger.info("Tool called", { tool: name });
 
   try {
     switch (name) {
+
+      // ── invoke_projectguide ───────────────────────────────────────────
       case "invoke_projectguide": {
+        const jiraOk = config.jira.connected || !!process.env.JIRA_URL;
+        const githubOk = config.github.connected || !!process.env.GITHUB_TOKEN;
         const missing = [];
-        if (!config.jira.connected && !process.env.JIRA_URL) missing.push("Jira");
-        if (!config.github.connected && !process.env.GITHUB_TOKEN) missing.push("GitHub");
+        if (!jiraOk) missing.push("Jira");
+        if (!githubOk) missing.push("GitHub");
 
-        let mission = "🚀 Project Guide Agent v2.0 ACTIVATED.\n\n";
-
+        let out = `Project Guide Agent v${CONST.VERSION} ACTIVATED.\n\n`;
         if (missing.length > 0) {
-          mission += `📋 Setup Required: ${missing.join(", ")} not yet connected.\n`;
-          mission += `Use 'configure_service' to set up these services, or set env vars:\n`;
-          if (missing.includes("Jira")) mission += `  - JIRA_URL, JIRA_EMAIL, JIRA_TOKEN\n`;
-          if (missing.includes("GitHub")) mission += `  - GITHUB_TOKEN, GITHUB_USER, GITHUB_REPO\n`;
+          out += `Setup required: ${missing.join(", ")}.\n`;
+          out += `Use 'configure_service' or set environment variables.\n`;
         } else {
-          mission += "✅ All services connected! Ready to go.\n";
-          mission += "Try 'morning_standup' to start your day or 'analyze_workload' to see your tasks.";
+          out += "All services connected. Use 'morning_standup' or 'analyze_workload' to begin.\n";
         }
-
-        return { content: [{ type: "text", text: mission }] };
+        return textResponse(out);
       }
 
+      // ── get_setup_status ──────────────────────────────────────────────
       case "get_setup_status": {
-        const missing = [];
-        if (!config.jira.connected && !process.env.JIRA_URL) missing.push("Jira");
-        if (!config.github.connected && !process.env.GITHUB_TOKEN) missing.push("GitHub");
-
         const status = {
-          version: "2.0.0",
+          version: CONST.VERSION,
           jira: {
             connected: config.jira.connected || !!process.env.JIRA_URL,
             url: config.jira.url || process.env.JIRA_URL || null,
+            email: config.jira.email || process.env.JIRA_EMAIL || null,
             token: maskToken(config.jira.token || process.env.JIRA_TOKEN),
           },
           github: {
             connected: config.github.connected || !!process.env.GITHUB_TOKEN,
             user: config.github.user || process.env.GITHUB_USER || null,
-            token: maskToken(config.github.token || process.env.GITHUB_TOKEN),
           },
-          missing_services: missing,
-          suggestion: missing.length > 0
-            ? `Setup ${missing[0]} to unlock more features`
-            : "All systems ready!",
+          reports: {
+            directory: ReportManager.REPORTS_DIR,
+            count: ReportManager.listReports().length,
+          },
+          developer_mode: config.developer_mode,
         };
-
-        return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }] };
+        return textResponse(JSON.stringify(status, null, 2));
       }
 
+      // ── configure_service ─────────────────────────────────────────────
       case "configure_service": {
         const { service, url, email, token, user, repo } = args;
 
+        const svcCheck = validate(serviceSchema, service);
+        if (!svcCheck.success) return errorResponse(svcCheck.error);
+
         if (service === "jira") {
-          if (!url || !email || !token) {
-            return {
-              content: [{ type: "text", text: "Error: Jira requires url, email, and token" }],
-              isError: true,
-            };
-          }
+          const urlCheck = validate(jiraUrlSchema, url);
+          if (!urlCheck.success) return errorResponse(`Jira URL: ${urlCheck.error}`);
+          const emailCheck = validate(emailSchema, email);
+          if (!emailCheck.success) return errorResponse(`Email: ${emailCheck.error}`);
+          if (!token) return errorResponse("Jira API token is required.");
+
           config.jira = { connected: true, url, email, token };
         } else if (service === "github") {
-          if (!token) {
-            return { content: [{ type: "text", text: "Error: GitHub requires token" }], isError: true };
-          }
-          config.github = { connected: true, token, user: user || "unknown", repo: repo || null };
-        } else {
-          return { content: [{ type: "text", text: `Unknown service: ${service}` }], isError: true };
+          if (!token) return errorResponse("GitHub token is required.");
+          config.github = { connected: true, token, user: user || null, repo: repo || null };
         }
 
         saveConfig();
-        return { content: [{ type: "text", text: `✅ ${service} configured successfully` }] };
+        Logger.info("Service configured", { service });
+        return textResponse(`${service} configured successfully.`);
       }
 
+      // ── jira_connection_test ──────────────────────────────────────────
       case "jira_connection_test": {
-        try {
-          const client = getJiraClient();
-          const result = await client.testConnection();
-          return {
-            content: [
-              {
-                type: "text",
-                text: `✅ Jira connection successful!\nUser: ${result.user}\nEmail: ${result.email}`,
-              },
-            ],
-          };
-        } catch (error) {
-          return { content: [{ type: "text", text: `❌ ${error.message}` }], isError: true };
-        }
+        const client = getJiraClient();
+        const result = await client.testConnection();
+        return textResponse(
+          `Jira connection successful.\nUser: ${result.user}\nEmail: ${result.email}\nAccount: ${result.accountId}`
+        );
       }
 
+      // ── fetch_jira_tickets ────────────────────────────────────────────
       case "fetch_jira_tickets": {
-        try {
-          const { assignee, status, sprint, updated_since } = args;
-          const client = getJiraClient();
+        const client = getJiraClient();
+        let jqlString;
 
-          let jql = [];
-          if (assignee) {
-            jql.push(`assignee = ${assignee === "currentUser" ? "currentUser()" : `"${assignee}"`}`);
+        if (args.jql) {
+          // Raw JQL passthrough
+          jqlString = args.jql;
+        } else {
+          const clauses = [];
+          if (args.assignee) {
+            clauses.push(
+              args.assignee === "currentUser"
+                ? "assignee = currentUser()"
+                : `assignee = "${args.assignee}"`
+            );
           }
-          if (status) {
-            const statuses = status.split(",").map(s => `"${s.trim()}"`).join(",");
-            jql.push(`status in (${statuses})`);
+          if (args.status) {
+            const statuses = args.status.split(",").map(s => `"${s.trim()}"`).join(",");
+            clauses.push(`status in (${statuses})`);
           }
-          if (sprint) {
-            jql.push(`sprint = "${sprint}"`);
+          if (args.sprint) {
+            clauses.push(`sprint = "${args.sprint}"`);
           }
-          if (updated_since) {
-            jql.push(`updated >= ${updated_since}`);
+          if (args.updated_since) {
+            clauses.push(`updated >= ${args.updated_since}`);
           }
-
-          const jqlString = jql.length > 0 ? jql.join(" AND ") : "ORDER BY updated DESC";
-          const tickets = await client.searchTickets(jqlString);
-
-          let output = `📋 Found ${tickets.length} ticket(s)\n\n`;
-          tickets.forEach(t => {
-            output += `[${t.priority}] ${t.key}: ${t.summary}\n`;
-            output += `   Status: ${t.status} | Assignee: ${t.assignee}\n`;
-            if (t.dueDate) output += `   Due: ${t.dueDate}\n`;
-            output += `\n`;
-          });
-
-          return { content: [{ type: "text", text: output }] };
-        } catch (error) {
-          return { content: [{ type: "text", text: `❌ ${error.message}` }], isError: true };
+          jqlString = clauses.length > 0
+            ? clauses.join(" AND ") + " ORDER BY updated DESC"
+            : "assignee = currentUser() ORDER BY updated DESC";
         }
+
+        const result = await client.searchTickets(jqlString);
+        const tickets = result.tickets;
+
+        let out = `Found ${tickets.length} ticket(s)`;
+        if (result.total > tickets.length) {
+          out += ` (showing ${tickets.length} of ${result.total})`;
+        }
+        out += `\n\n`;
+
+        for (const t of tickets) {
+          out += `[${t.priority}] ${t.key}: ${t.summary}\n`;
+          out += `   Status: ${t.status} | Assignee: ${t.assignee}`;
+          if (t.dueDate) out += ` | Due: ${t.dueDate}`;
+          if (t.labels.length > 0) out += ` | Labels: ${t.labels.join(", ")}`;
+          out += `\n`;
+        }
+
+        return textResponse(out);
       }
 
+      // ── get_ticket_details ────────────────────────────────────────────
       case "get_ticket_details": {
-        try {
-          const { ticket_key } = args;
-          if (!ticket_key) {
-            return { content: [{ type: "text", text: "Error: ticket_key required" }], isError: true };
+        const keyCheck = validate(ticketKeySchema, args.ticket_key);
+        if (!keyCheck.success) return errorResponse(keyCheck.error);
+
+        const client = getJiraClient();
+        const t = await client.getTicket(args.ticket_key);
+
+        let out = `${t.key}: ${t.summary}\n\n`;
+        out += `Status: ${t.status} | Priority: ${t.priority} | Assignee: ${t.assignee}\n`;
+        if (t.dueDate) out += `Due: ${t.dueDate}\n`;
+        if (t.labels.length > 0) out += `Labels: ${t.labels.join(", ")}\n`;
+        out += `\nDescription:\n${t.description}\n`;
+
+        if (t.subtasks.length > 0) {
+          out += `\nSubtasks (${t.subtasks.length}):\n`;
+          for (const st of t.subtasks) {
+            out += `  - ${st.key}: ${st.summary} [${st.status}]\n`;
           }
-
-          const client = getJiraClient();
-          const ticket = await client.getTicket(ticket_key);
-
-          let output = `📄 ${ticket.key}: ${ticket.summary}\n\n`;
-          output += `Status: ${ticket.status} | Priority: ${ticket.priority}\n`;
-          output += `Assignee: ${ticket.assignee}\n`;
-          if (ticket.dueDate) output += `Due: ${ticket.dueDate}\n`;
-          output += `\nDescription:\n${ticket.description}\n`;
-
-          if (ticket.subtasks.length > 0) {
-            output += `\n📌 Subtasks:\n`;
-            ticket.subtasks.forEach(st => {
-              output += `  - ${st.key}: ${st.summary} [${st.status}]\n`;
-            });
-          }
-
-          if (ticket.comments.length > 0) {
-            output += `\n💬 Latest Comments:\n`;
-            ticket.comments.slice(-3).forEach(c => {
-              output += `  ${c.author}: ${c.body.substring(0, 100)}...\n`;
-            });
-          }
-
-          return { content: [{ type: "text", text: output }] };
-        } catch (error) {
-          return { content: [{ type: "text", text: `❌ ${error.message}` }], isError: true };
         }
+
+        if (t.issueLinks.length > 0) {
+          out += `\nLinked Issues:\n`;
+          for (const link of t.issueLinks) {
+            out += `  - ${link.description}: ${link.linkedKey} [${link.linkedStatus}]\n`;
+          }
+        }
+
+        if (t.comments.length > 0) {
+          out += `\nComments (latest ${Math.min(t.comments.length, CONST.COMMENT_PREVIEW_COUNT)}):\n`;
+          for (const c of t.comments.slice(-CONST.COMMENT_PREVIEW_COUNT)) {
+            const preview = (c.body || '').substring(0, CONST.COMMENT_PREVIEW_LENGTH);
+            const ellipsis = c.body && c.body.length > CONST.COMMENT_PREVIEW_LENGTH ? '...' : '';
+            out += `  ${c.author}: ${preview}${ellipsis}\n`;
+          }
+        }
+
+        if (t.changelog.length > 0) {
+          out += `\nRecent Status Changes:\n`;
+          for (const h of t.changelog) {
+            const statusChanges = h.items.filter(i => i.field === 'status');
+            for (const s of statusChanges) {
+              out += `  ${h.created.substring(0, 10)}: ${s.from} -> ${s.to} (by ${h.author})\n`;
+            }
+          }
+        }
+
+        return textResponse(out);
       }
 
+      // ── analyze_workload ──────────────────────────────────────────────
       case "analyze_workload": {
-        try {
-          const client = getJiraClient();
+        const client = getJiraClient();
+        const result = await client.searchTickets(
+          "assignee = currentUser() ORDER BY priority DESC, duedate ASC"
+        );
+        const tickets = result.tickets;
+        const now = new Date();
 
-          // Fetch all assigned tickets
-          const allTickets = await client.searchTickets('assignee = currentUser() ORDER BY priority DESC, duedate ASC');
+        const cat = { done: [], inProgress: [], notStarted: [], blocked: [], overdue: [] };
 
-          // Categorize tickets
-          const categorized = {
-            done: [],
-            inProgress: [],
-            notStarted: [],
-            blocked: [],
-            overdue: [],
-          };
+        for (const t of tickets) {
+          const dueDate = t.dueDate ? new Date(t.dueDate) : null;
+          const overdue = dueDate && dueDate < now && t.statusCategory !== "Done";
 
-          const now = new Date();
-
-          allTickets.forEach(ticket => {
-            const dueDate = ticket.dueDate ? new Date(ticket.dueDate) : null;
-            const isOverdue = dueDate && dueDate < now && ticket.status !== "Done";
-
-            if (ticket.status === "Done") {
-              categorized.done.push(ticket);
-            } else if (ticket.status === "In Progress") {
-              categorized.inProgress.push(ticket);
-            } else if (isOverdue) {
-              categorized.overdue.push(ticket);
-            } else if (ticket.summary.includes("BLOCKED") || ticket.summary.includes("blocked")) {
-              categorized.blocked.push(ticket);
-            } else {
-              categorized.notStarted.push(ticket);
-            }
-          });
-
-          let output = `📊 Workload Analysis\n`;
-          output += `Total: ${allTickets.length} ticket(s)\n\n`;
-
-          output += `✅ Done (${categorized.done.length}): ${categorized.done.map(t => t.key).join(", ") || "None"}\n`;
-          output += `🚧 In Progress (${categorized.inProgress.length}): ${categorized.inProgress.map(t => t.key).join(", ") || "None"}\n`;
-          output += `📌 Not Started (${categorized.notStarted.length}): ${categorized.notStarted.map(t => t.key).join(", ") || "None"}\n`;
-          output += `🚫 Blocked (${categorized.blocked.length}): ${categorized.blocked.map(t => t.key).join(", ") || "None"}\n`;
-          output += `⏰ Overdue (${categorized.overdue.length}): ${categorized.overdue.map(t => t.key).join(", ") || "None"}\n`;
-
-          if (categorized.inProgress.length > 0) {
-            output += `\n🎯 Recommended Next Step:\n`;
-            const next = categorized.inProgress[0];
-            output += `${next.key}: ${next.summary}\n`;
+          if (t.statusCategory === "Done" || t.status === "Done") {
+            cat.done.push(t);
+          } else if (isTicketBlocked(t)) {
+            cat.blocked.push(t);
+          } else if (overdue) {
+            cat.overdue.push(t);
+          } else if (t.status === "In Progress") {
+            cat.inProgress.push(t);
+          } else {
+            cat.notStarted.push(t);
           }
-
-          return { content: [{ type: "text", text: output }] };
-        } catch (error) {
-          return { content: [{ type: "text", text: `❌ ${error.message}` }], isError: true };
         }
+
+        const fmt = (arr) => arr.length > 0
+          ? arr.map(t => `${t.key}: ${t.summary}`).join(", ")
+          : "None";
+
+        let out = `Workload Analysis (${tickets.length} total`;
+        if (result.total > tickets.length) out += `, ${result.total} in Jira`;
+        out += `)\n\n`;
+
+        out += `Done (${cat.done.length}): ${fmt(cat.done)}\n`;
+        out += `In Progress (${cat.inProgress.length}): ${fmt(cat.inProgress)}\n`;
+        out += `Not Started (${cat.notStarted.length}): ${fmt(cat.notStarted)}\n`;
+        out += `Blocked (${cat.blocked.length}): ${fmt(cat.blocked)}\n`;
+        out += `Overdue (${cat.overdue.length}): ${fmt(cat.overdue)}\n`;
+
+        // Insights
+        out += `\n--- Insights ---\n`;
+        if (cat.overdue.length > 0) {
+          out += `OVERDUE: ${cat.overdue.map(t => `${t.key} (due ${t.dueDate})`).join(", ")}\n`;
+        }
+        if (cat.blocked.length > 0) {
+          for (const t of cat.blocked) {
+            const blockers = (t.issueLinks || [])
+              .filter(l => l.description?.toLowerCase().includes("is blocked by"))
+              .map(l => l.linkedKey);
+            out += `BLOCKED: ${t.key} — blocked by: ${blockers.join(", ") || "flagged/labeled"}\n`;
+          }
+        }
+        if (cat.inProgress.length > 0) {
+          out += `\nRecommended focus: ${cat.inProgress[0].key} (${cat.inProgress[0].summary})\n`;
+        } else if (cat.overdue.length > 0) {
+          out += `\nRecommended focus: ${cat.overdue[0].key} (OVERDUE)\n`;
+        } else if (cat.notStarted.length > 0) {
+          out += `\nRecommended next: ${cat.notStarted[0].key} (${cat.notStarted[0].summary})\n`;
+        }
+
+        return textResponse(out);
       }
 
+      // ── get_recent_commits ────────────────────────────────────────────
       case "get_recent_commits": {
+        const since = args.since || CONST.GIT_DEFAULT_SINCE;
+        const commits = await GitUtils.getRecentCommits(since, getRepoPath());
+
+        if (commits.length === 0) {
+          return textResponse(`No commits found since ${since}.`);
+        }
+
+        let out = `Recent Commits (${since}) — ${commits.length} total\n\n`;
+        for (const c of commits) {
+          out += `${c.hash}: ${c.message}\n`;
+          if (c.ticketIds.length > 0) out += `   Tickets: ${c.ticketIds.join(", ")}\n`;
+          out += `   ${c.author} @ ${c.datetime}\n\n`;
+        }
+
+        return textResponse(out);
+      }
+
+      // ── morning_standup ───────────────────────────────────────────────
+      case "morning_standup": {
+        let tickets = [];
+        let jiraError = null;
+        let totalTickets = 0;
+
+        // Jira: graceful degradation
         try {
-          const { since = "48 hours ago" } = args;
-          const repoPath = process.env.GITHUB_REPO ? process.cwd() : process.cwd();
-          const commits = await GitUtils.getRecentCommits(since, repoPath);
+          const client = getJiraClient();
+          const result = await client.searchTickets(
+            "assignee = currentUser() AND statusCategory != Done ORDER BY priority DESC, duedate ASC"
+          );
+          tickets = result.tickets;
+          totalTickets = result.total;
+        } catch (err) {
+          jiraError = err.message;
+          Logger.warn("Jira unavailable for standup", { error: err.message });
+        }
 
-          if (commits.length === 0) {
-            return { content: [{ type: "text", text: "No commits found in the specified period." }] };
-          }
+        // Git: graceful degradation
+        let commits = [];
+        try {
+          commits = await GitUtils.getRecentCommits(CONST.STANDUP_COMMIT_WINDOW, getRepoPath());
+        } catch (err) {
+          Logger.warn("Git unavailable for standup", { error: err.message });
+        }
 
-          let output = `📝 Recent Commits (${since})\n\n`;
-          commits.forEach(c => {
-            output += `${c.hash}: ${c.message}\n`;
-            if (c.ticketIds.length > 0) {
-              output += `   Tickets: ${c.ticketIds.join(", ")}\n`;
-            }
-            output += `   By: ${c.author} on ${c.datetime}\n\n`;
+        // Carry-forward from yesterday
+        const carryForward = ReportManager.getYesterdayCarryForward();
+
+        const now = new Date();
+        let out = `Morning Standup — ${now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}\n\n`;
+
+        if (jiraError) {
+          out += `[Jira unavailable: ${jiraError}]\n\n`;
+        }
+
+        // Workload summary
+        if (tickets.length > 0) {
+          const highPriority = tickets.filter(t => t.priority === "Highest" || t.priority === "High");
+          const inProgress = tickets.filter(t => t.status === "In Progress");
+          const overdue = tickets.filter(t => {
+            const due = t.dueDate ? new Date(t.dueDate) : null;
+            return due && due < now;
           });
 
-          return { content: [{ type: "text", text: output }] };
-        } catch (error) {
-          return { content: [{ type: "text", text: `❌ ${error.message}` }], isError: true };
-        }
-      }
+          out += `Workload: ${tickets.length} pending`;
+          if (totalTickets > tickets.length) out += ` (${totalTickets} total)`;
+          out += `\n\n`;
 
-      case "morning_standup": {
-        try {
-          const client = getJiraClient();
-
-          // Get pending and in-progress tickets
-          const tickets = await client.searchTickets(
-            'assignee = currentUser() AND status != Done ORDER BY priority DESC, duedate ASC'
-          );
-
-          // Get recent commits
-          const commits = await GitUtils.getRecentCommits("48 hours ago");
-
-          let output = `🌅 Morning Standup\n`;
-          output += `📅 ${new Date().toLocaleDateString()}\n\n`;
-
-          // Tickets summary
-          output += `📊 Your Workload:\n`;
-          output += `Total pending: ${tickets.length} ticket(s)\n\n`;
-
-          // High priority tickets
-          const highPriority = tickets.filter(t => t.priority === "Highest" || t.priority === "High");
-          if (highPriority.length > 0) {
-            output += `🔴 High Priority:\n`;
-            highPriority.forEach(t => {
-              output += `  - ${t.key}: ${t.summary}\n`;
-              if (t.dueDate) output += `    Due: ${t.dueDate}\n`;
-            });
-            output += `\n`;
-          }
-
-          // In progress tickets
-          const inProgress = tickets.filter(t => t.status === "In Progress");
-          if (inProgress.length > 0) {
-            output += `🚧 Currently Working On:\n`;
-            inProgress.forEach(t => {
-              output += `  - ${t.key}: ${t.summary}\n`;
-            });
-            output += `\n`;
-          }
-
-          // Recent commits
-          if (commits.length > 0) {
-            output += `✅ Recent Work:\n`;
-            output += `${commits.length} commit(s) in last 48 hours\n`;
-            commits.slice(0, 3).forEach(c => {
-              output += `  - ${c.hash}: ${c.message}\n`;
-            });
-            output += `\n`;
-          }
-
-          // Daily plan
-          output += `📋 Suggested Daily Plan:\n`;
-          if (inProgress.length > 0) {
-            output += `1. Continue: ${inProgress[0].key}\n`;
-            if (highPriority.length > 0 && !inProgress.includes(highPriority[0])) {
-              output += `2. Focus on: ${highPriority[0].key}\n`;
+          if (overdue.length > 0) {
+            out += `OVERDUE (${overdue.length}):\n`;
+            for (const t of overdue) {
+              out += `  - ${t.key}: ${t.summary} (due ${t.dueDate})\n`;
             }
-          } else if (highPriority.length > 0) {
-            output += `1. Start: ${highPriority[0].key}\n`;
+            out += `\n`;
           }
 
-          return { content: [{ type: "text", text: output }] };
-        } catch (error) {
-          return { content: [{ type: "text", text: `❌ ${error.message}` }], isError: true };
+          if (highPriority.length > 0) {
+            out += `High Priority (${highPriority.length}):\n`;
+            for (const t of highPriority) {
+              out += `  - ${t.key}: ${t.summary}`;
+              if (t.dueDate) out += ` (due ${t.dueDate})`;
+              out += `\n`;
+            }
+            out += `\n`;
+          }
+
+          if (inProgress.length > 0) {
+            out += `Currently Working On (${inProgress.length}):\n`;
+            for (const t of inProgress) {
+              // Check if commits exist for this ticket
+              const related = commits.filter(c => c.ticketIds.includes(t.key));
+              out += `  - ${t.key}: ${t.summary}`;
+              if (related.length > 0) out += ` (${related.length} recent commit(s))`;
+              out += `\n`;
+            }
+            out += `\n`;
+          }
+
+          // Suggested plan
+          out += `--- Suggested Plan ---\n`;
+          let step = 1;
+          if (inProgress.length > 0) {
+            out += `${step++}. Continue: ${inProgress[0].key} — ${inProgress[0].summary}\n`;
+            // Recommend high-priority if it's NOT already in progress
+            const inProgressKeys = new Set(inProgress.map(t => t.key));
+            const nextHigh = highPriority.find(t => !inProgressKeys.has(t.key));
+            if (nextHigh) {
+              out += `${step++}. Prioritize: ${nextHigh.key} — ${nextHigh.summary}\n`;
+            }
+          } else if (overdue.length > 0) {
+            out += `${step++}. Urgent: ${overdue[0].key} — ${overdue[0].summary} (OVERDUE)\n`;
+          } else if (highPriority.length > 0) {
+            out += `${step++}. Start: ${highPriority[0].key} — ${highPriority[0].summary}\n`;
+          }
+          out += `\n`;
         }
+
+        // Recent commits
+        if (commits.length > 0) {
+          out += `Recent Activity (${commits.length} commit(s) in ${CONST.STANDUP_COMMIT_WINDOW}):\n`;
+          for (const c of commits.slice(0, CONST.COMMITS_PREVIEW_LIMIT)) {
+            const ticketTag = c.ticketIds.length > 0 ? ` [${c.ticketIds.join(", ")}]` : '';
+            out += `  - ${c.hash}: ${c.message}${ticketTag}\n`;
+          }
+          if (commits.length > CONST.COMMITS_PREVIEW_LIMIT) {
+            out += `  ... and ${commits.length - CONST.COMMITS_PREVIEW_LIMIT} more\n`;
+          }
+          out += `\n`;
+        }
+
+        // Carry-forward
+        if (carryForward.length > 0) {
+          out += `Carried from yesterday:\n`;
+          for (const item of carryForward) {
+            out += `  - ${item}\n`;
+          }
+        }
+
+        return textResponse(out);
       }
 
+      // ── end_of_day_report ─────────────────────────────────────────────
       case "end_of_day_report": {
+        if (args.date) {
+          const dateCheck = validate(dateSchema, args.date);
+          if (!dateCheck.success) return errorResponse(dateCheck.error);
+        }
+        const reportDate = args.date || ReportManager.formatDate();
+
+        // Git: today's commits
+        let commits = [];
         try {
-          const { date } = args;
-          const reportDate = date || ReportManager.formatDate();
+          commits = await GitUtils.getTodayCommits(getRepoPath());
+        } catch (err) {
+          Logger.warn("Git unavailable for EOD", { error: err.message });
+        }
 
-          // Get today's commits
-          const commits = await GitUtils.getTodayCommits();
-
-          // Get today's tickets activity
+        // Jira: today's ticket activity (graceful)
+        let completed = [];
+        let inProgress = [];
+        let jiraError = null;
+        try {
           const client = getJiraClient();
-          const tickets = await client.searchTickets(
+          const result = await client.searchTickets(
             `assignee = currentUser() AND updated >= "${reportDate}" ORDER BY updated DESC`
           );
-
-          // Categorize tickets
-          const completed = tickets.filter(t => t.status === "Done");
-          const inProgress = tickets.filter(t => t.status === "In Progress");
-
-          // Generate report
-          const report = ReportManager.generateDailyReport(
-            reportDate,
-            completed.map(t => `${t.key}: ${t.summary}`),
-            inProgress.map(t => `${t.key}: ${t.summary}`),
-            commits,
-            [],
-            `${commits.length} commit(s) made. ${completed.length} ticket(s) completed.`
-          );
-
-          // Save report
-          const reportPath = ReportManager.saveReport(reportDate, report);
-
-          let output = `✅ Daily Report Generated\n\n`;
-          output += `📁 Saved to: ${reportPath}\n\n`;
-          output += `📊 Summary:\n`;
-          output += `- ${commits.length} commit(s)\n`;
-          output += `- ${completed.length} completed ticket(s)\n`;
-          output += `- ${inProgress.length} in-progress ticket(s)\n`;
-
-          return { content: [{ type: "text", text: output }] };
-        } catch (error) {
-          return { content: [{ type: "text", text: `❌ ${error.message}` }], isError: true };
+          completed = result.tickets.filter(t => t.statusCategory === "Done" || t.status === "Done");
+          inProgress = result.tickets.filter(t => t.status === "In Progress");
+        } catch (err) {
+          jiraError = err.message;
+          Logger.warn("Jira unavailable for EOD", { error: err.message });
         }
+
+        // Carry-forward: yesterday's in-progress minus today's completed
+        const carryForward = ReportManager.getYesterdayCarryForward()
+          .filter(item => !completed.some(t => item.includes(t.key)));
+
+        // Also add today's in-progress as carry-forward
+        for (const t of inProgress) {
+          const entry = `${t.key}: ${t.summary}`;
+          if (!carryForward.includes(entry)) carryForward.push(entry);
+        }
+
+        // Notes
+        let notes = '';
+        if (commits.length > 0) notes += `${commits.length} commit(s) made today. `;
+        if (completed.length > 0) notes += `${completed.length} ticket(s) completed. `;
+        if (jiraError) notes += `[Jira was unavailable: ${jiraError}]`;
+        if (!notes) notes = 'Quiet day.';
+
+        const report = ReportManager.generateDailyReport(reportDate, {
+          completed: completed.map(t => `${t.key}: ${t.summary}`),
+          inProgress: inProgress.map(t => `${t.key}: ${t.summary}`),
+          commits,
+          carryForward,
+          blockers: [],
+          notes,
+        });
+
+        const reportPath = ReportManager.saveReport(reportDate, report);
+
+        let out = `End-of-Day Report — ${reportDate}\n\n`;
+        out += `Saved to: ${reportPath}\n\n`;
+        out += `Summary:\n`;
+        out += `- ${commits.length} commit(s)\n`;
+        out += `- ${completed.length} ticket(s) completed\n`;
+        out += `- ${inProgress.length} ticket(s) in progress\n`;
+        out += `- ${carryForward.length} item(s) carry forward\n`;
+        if (jiraError) out += `\n[Jira was unavailable — report based on Git data only]\n`;
+
+        return textResponse(out);
       }
 
+      // ── get_daily_report ──────────────────────────────────────────────
       case "get_daily_report": {
-        try {
-          const { date } = args;
-          if (!date) {
-            return { content: [{ type: "text", text: "Error: date required (YYYY-MM-DD)" }], isError: true };
-          }
+        const dateCheck = validate(dateSchema, args.date);
+        if (!dateCheck.success) return errorResponse(dateCheck.error);
 
-          const content = ReportManager.getReport(date);
-          return { content: [{ type: "text", text: content }] };
-        } catch (error) {
-          return { content: [{ type: "text", text: `❌ ${error.message}` }], isError: true };
+        const content = ReportManager.getReport(args.date);
+        if (!content) {
+          return errorResponse(`No report found for ${args.date}. Use 'list_daily_reports' to see available dates.`);
         }
+        return textResponse(content);
       }
 
+      // ── list_daily_reports ────────────────────────────────────────────
       case "list_daily_reports": {
-        try {
-          const { start_date, end_date } = args;
-          const reports = ReportManager.listReports(start_date, end_date);
-
-          if (reports.length === 0) {
-            return { content: [{ type: "text", text: "No daily reports found." }] };
-          }
-
-          let output = `📋 Daily Reports\n\n`;
-          reports.forEach(r => {
-            const stats = fs.readFileSync(r.path, 'utf-8');
-            const lines = stats.split('\n').length;
-            output += `- ${r.date} (${lines} lines)\n`;
-          });
-
-          return { content: [{ type: "text", text: output }] };
-        } catch (error) {
-          return { content: [{ type: "text", text: `❌ ${error.message}` }], isError: true };
+        if (args.start_date) {
+          const c = validate(dateSchema, args.start_date);
+          if (!c.success) return errorResponse(`start_date: ${c.error}`);
         }
+        if (args.end_date) {
+          const c = validate(dateSchema, args.end_date);
+          if (!c.success) return errorResponse(`end_date: ${c.error}`);
+        }
+
+        const reports = ReportManager.listReports(args.start_date, args.end_date);
+        if (reports.length === 0) return textResponse("No daily reports found.");
+
+        let out = `Daily Reports (${reports.length})\n\n`;
+        for (const r of reports) {
+          const content = ReportManager.getReport(r.date);
+          if (content) {
+            const sections = ReportManager._extractSections(content);
+            out += `${r.date}: ${sections.completed.length} completed, ${sections.commitCount} commits\n`;
+          } else {
+            out += `${r.date}: (file missing)\n`;
+          }
+        }
+        return textResponse(out);
       }
 
+      // ── weekly_summary ────────────────────────────────────────────────
+      case "weekly_summary": {
+        if (args.end_date) {
+          const c = validate(dateSchema, args.end_date);
+          if (!c.success) return errorResponse(c.error);
+        }
+        const endDate = args.end_date ? new Date(args.end_date) : new Date();
+        const summary = ReportManager.generateWeeklySummary(endDate);
+        return textResponse(summary);
+      }
+
+      // ── health_check ──────────────────────────────────────────────────
+      case "health_check": {
+        const results = {
+          version: CONST.VERSION,
+          timestamp: new Date().toISOString(),
+          jira: { status: "unchecked" },
+          git: { status: "unchecked" },
+          reports: { status: "unchecked" },
+        };
+
+        // Jira
+        try {
+          const client = getJiraClient();
+          const user = await client.testConnection();
+          results.jira = { status: "ok", user: user.user };
+        } catch (err) {
+          results.jira = { status: "error", message: err.message };
+        }
+
+        // Git
+        try {
+          const commits = await GitUtils.getRecentCommits("1 hour ago", getRepoPath());
+          results.git = { status: "ok", recentCommits: commits.length };
+        } catch (err) {
+          results.git = { status: "error", message: err.message };
+        }
+
+        // Reports directory
+        try {
+          ReportManager.ensureDir();
+          fs.accessSync(ReportManager.REPORTS_DIR, fs.constants.W_OK);
+          const reps = ReportManager.listReports();
+          results.reports = { status: "ok", count: reps.length, dir: ReportManager.REPORTS_DIR };
+        } catch (err) {
+          results.reports = { status: "error", message: err.message };
+        }
+
+        const allOk = Object.values(results)
+          .filter(v => typeof v === 'object' && v.status)
+          .every(v => v.status === 'ok');
+
+        let out = `Health Check — ${allOk ? 'ALL OK' : 'ISSUES DETECTED'}\n\n`;
+        out += JSON.stringify(results, null, 2);
+        return textResponse(out);
+      }
+
+      // ── run_skill ─────────────────────────────────────────────────────
       case "run_skill": {
         const { skill, args: skillArgs } = args;
 
         if (skill === "developer-mode") {
           config.developer_mode = !config.developer_mode;
           saveConfig();
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Developer Mode is now ${config.developer_mode ? "ENABLED" : "DISABLED"}`,
-              },
-            ],
-          };
+          return textResponse(`Developer Mode: ${config.developer_mode ? "ENABLED" : "DISABLED"}`);
         }
 
         if (skill === "file-info") {
           const targetPath = skillArgs || ".";
           try {
             const stats = fs.statSync(targetPath);
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `📄 File Info for "${targetPath}":\n- Type: ${stats.isDirectory() ? "Directory" : "File"}\n- Size: ${stats.size} bytes\n- Modified: ${stats.mtime}`,
-                },
-              ],
-            };
+            return textResponse(
+              `File: "${targetPath}"\nType: ${stats.isDirectory() ? "Directory" : "File"}\nSize: ${stats.size} bytes\nModified: ${stats.mtime.toISOString()}`
+            );
           } catch (e) {
-            return { content: [{ type: "text", text: `Error: ${e.message}` }], isError: true };
+            return errorResponse(`File error: ${e.message}`);
           }
         }
 
-        return { content: [{ type: "text", text: `Unknown skill: ${skill}` }], isError: true };
+        return errorResponse(`Unknown skill: ${skill}`);
       }
 
       default:
-        return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
+        return errorResponse(`Unknown tool: ${name}`);
     }
   } catch (error) {
-    return { content: [{ type: "text", text: `Error: ${error.message}` }], isError: true };
+    Logger.error("Tool execution failed", { tool: name, error: error.message, code: error.code });
+    const prefix = error.code ? `[${error.code}] ` : '';
+    return errorResponse(`${prefix}${error.message}`);
   }
 });
+
+// ── Start ───────────────────────────────────────────────────────────────
 
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Project Guide Agent v2.0.0 running on stdio");
+  Logger.info("Server started", { version: CONST.VERSION });
 }
 
 main().catch((error) => {
-  console.error("Fatal error:", error);
+  Logger.error("Fatal error", { error: error.message });
   process.exit(1);
 });
