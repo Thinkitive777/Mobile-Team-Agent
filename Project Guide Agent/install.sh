@@ -28,25 +28,41 @@ fi
 
 # Copy binary
 cp "$SOURCE_BINARY" "$INSTALL_DIR/$BINARY_NAME"
-chmod +x "$INSTALL_DIR/$BINARY_NAME"
+cp "./invoke" "$INSTALL_DIR/invoke"
+chmod +x "$INSTALL_DIR/$BINARY_NAME" "$INSTALL_DIR/invoke"
 
-echo "✅ Binary installed to $INSTALL_DIR/$BINARY_NAME"
+echo "✅ Binaries installed to $INSTALL_DIR"
 
 # Register with Claude
-echo "🔗 Registering with Claude CLI..."
-# Remove if exists to avoid "already exists" error
+echo "🔗 Registering MCP server with Claude CLI..."
 claude mcp remove projectguide-agent > /dev/null 2>&1
-
 claude mcp add projectguide-agent -- "$INSTALL_DIR/$BINARY_NAME"
 
 if [ $? -eq 0 ]; then
-    echo "✨ Success! You can now use the Project Guide Agent by running 'claude' and saying 'Good morning' or 'invoke projectguide-agent'."
+    echo "✨ MCP Registration Successful!"
 else
-    echo "⚠️  Note: Registration might have failed. Please try manually:"
+    echo "⚠️  Note: MCP Registration might have failed. Please try manually:"
     echo "   claude mcp add projectguide-agent -- $INSTALL_DIR/$BINARY_NAME"
 fi
 
+# Automatic CLAUDE.md setup
+if [ -f "../CLAUDE.md" ]; then
+    echo "📝 Setting up CLAUDE.md in current directory..."
+    cp "../CLAUDE.md" "./CLAUDE.md"
+    # Also attempt to copy to parent if it looks like a project root
+    if [[ ! -f "../../CLAUDE.md" ]]; then
+        cp "../CLAUDE.md" "../../CLAUDE.md" 2>/dev/null
+        echo "✅ CLAUDE.md copied to project root."
+    fi
+fi
+
+echo ""
+echo "🎉 Installation Complete!"
+echo "🚀 You can now run: invoke projectguide-agent"
+echo ""
+
 # Add to PATH (optional, but helpful for direct use)
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
-    echo "💡 Tip: Add $INSTALL_DIR to your PATH to run 'projectguide-agent' directly."
+    echo "💡 To use the 'invoke' command anywhere, add this to your .zshrc or .bashrc:"
+    echo "   export PATH=\"\$PATH:$INSTALL_DIR\""
 fi

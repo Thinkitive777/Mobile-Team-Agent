@@ -1,0 +1,20 @@
+#!/bin/bash
+
+# Project Guide Agent 'invoke' wrapper
+# This script makes 'invoke projectguide-agent' work from the terminal.
+
+if [ "$1" == "projectguide-agent" ]; then
+    shift
+    claude "invoke projectguide-agent $@"
+elif [ "$1" == "--help" ] || [ "$1" == "-h" ]; then
+    echo "Project Guide Agent - Invoke Wrapper"
+    echo "Usage: invoke projectguide-agent [additional prompts]"
+    echo "       invoke [claude arguments]"
+else
+    # Fallback to standard claude if no arguments or unknown arguments
+    if [ -z "$1" ]; then
+        claude
+    else
+        claude "$@"
+    fi
+fi

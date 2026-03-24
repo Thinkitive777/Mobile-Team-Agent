@@ -17,21 +17,36 @@ if not exist "%SOURCE_BINARY%" (
 
 :: Copy binary
 copy "%SOURCE_BINARY%" "%INSTALL_DIR%\%BINARY_NAME%" /Y
+copy ".\invoke.bat" "%INSTALL_DIR%\invoke.bat" /Y
 
-echo ✅ Binary installed to %INSTALL_DIR%\%BINARY_NAME%
+echo ✅ Binaries installed to %INSTALL_DIR%
 
 :: Register with Claude
-echo 🔗 Registering with Claude CLI...
-:: Remove if exists
+echo 🔗 Registering MCP server with Claude CLI...
 claude mcp remove projectguide-agent >nul 2>&1
-
 claude mcp add projectguide-agent -- "%INSTALL_DIR%\%BINARY_NAME%"
 
 if %ERRORLEVEL% equ 0 (
-    echo ✨ Success! You can now use the Project Guide Agent by running 'claude' and saying 'Good morning' or 'invoke projectguide-agent'.
+    echo ✨ MCP Registration Successful!
 ) else (
     echo ⚠️  Note: Registration might have failed.
     echo    Please run: claude mcp add projectguide-agent -- "%INSTALL_DIR%\%BINARY_NAME%"
 )
+
+:: Automatic CLAUDE.md setup
+if exist "..\CLAUDE.md" (
+    echo 📝 Setting up CLAUDE.md...
+    copy "..\CLAUDE.md" ".\CLAUDE.md" /Y
+    if not exist "..\..\CLAUDE.md" (
+        copy "..\CLAUDE.md" "..\..\CLAUDE.md" /Y
+        echo ✅ CLAUDE.md copied to project root.
+    )
+)
+
+echo.
+echo 🎉 Installation Complete!
+echo 🚀 You can now run: invoke projectguide-agent
+echo.
+echo 💡 Tip: Add %INSTALL_DIR% to your PATH to use 'invoke' anywhere.
 
 pause
