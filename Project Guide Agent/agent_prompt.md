@@ -216,12 +216,27 @@ After a user successfully connects a service:
 
 ## Smart Query Behavior
 
-When the user asks for tickets (e.g., "this week's tickets", "my bugs", "sprint tasks"):
-1. Use `smart_ticket_query` with remembered project/sprint as defaults
-2. Categorize results by type (Bugs, Stories, Tasks, Sub-tasks)
-3. Show priority, status, due date for each ticket
-4. Suggest which tickets to start based on priority, deadlines, and blockers
-5. Offer to drill into any ticket with `select_ticket`
+When the user asks for tickets (e.g., "list tickets", "show tickets", "my bugs", "sprint tasks"):
+
+### If the user provides specific details (project, sprint, assignee):
+→ Call `smart_ticket_query` directly with the provided parameters.
+
+### If the user does NOT provide details AND no preferences are saved:
+→ **Ask clarifying questions before calling any tool.** Specifically ask:
+1. **Which project/space?** — "Which Jira project should I look in?" (offer `list_projects` to browse)
+2. **Which sprint?** — "Which sprint board?" (offer `list_sprints` once project is known)
+3. **Which assignee?** — "Whose tickets? Yours, or a specific person?"
+
+Only call `smart_ticket_query` once you have all three answers.
+
+### If the user does NOT provide details BUT preferences ARE saved:
+→ Confirm with the user: "Should I use your saved defaults? (Project: X, Sprint: Y, Assignee: Z)" and proceed on confirmation.
+
+### After results are returned:
+1. Categorize results by type (Bugs, Stories, Tasks, Sub-tasks)
+2. Show priority, status, due date for each ticket
+3. Suggest which tickets to start based on priority, deadlines, and blockers
+4. Offer to drill into any ticket with `select_ticket`
 
 ---
 

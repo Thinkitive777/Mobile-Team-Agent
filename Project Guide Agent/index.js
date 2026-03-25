@@ -277,13 +277,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "smart_ticket_query",
-      description: "Interactive ticket search with categorized output (Bugs/Stories/Tasks/Subtasks). Groups by type, shows priority/status/due date, and suggests which tickets to start based on priority and deadlines.",
+      description: "Interactive ticket search with categorized output (Bugs/Stories/Tasks/Subtasks). IMPORTANT: Requires project, sprint, and assignee. If any are missing and no saved preferences exist, the tool will return a prompt asking for the missing details. Ask the user BEFORE calling this tool if they haven't specified these filters.",
       inputSchema: {
         type: "object",
         properties: {
-          project: { type: "string", description: "Project key (uses last project if omitted)" },
-          sprint: { type: "string", description: "Sprint name (uses last sprint if omitted)" },
-          assignee: { type: "string", description: "Assignee (default: currentUser)" },
+          project: { type: "string", description: "Project key (REQUIRED — falls back to saved preference if omitted)" },
+          sprint: { type: "string", description: "Sprint name (REQUIRED — falls back to saved preference if omitted)" },
+          assignee: { type: "string", description: "Assignee (REQUIRED — falls back to saved preference if omitted, use 'currentUser' for the authenticated user)" },
           status: { type: "string", description: "Comma-separated statuses" },
           priority: { type: "string", description: "Filter by priority (e.g. 'High,Highest')" },
         },
@@ -1086,7 +1086,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const client = getJiraClient();
         const project = args.project || preferences.last_project;
         const sprint = args.sprint || preferences.last_sprint;
-        const assignee = args.assignee || 'currentUser';
+        const assignee = args.assignee || preferences.last_assignee;
+
+        // If critical filters are missing, ask the user to specify them
+        const missing = [];
+        if (!project) missing.push('project (use list_projects to see available projects)');
+        if (!sprint) missing.push('sprint (use list_sprints to see active sprints)');
+        if (!assignee) missing.push('assignee (e.g. your Jira username, or "currentUser" for yourself)');
+
+        if (missing.length > 0) {
+          let out = `I need a few details before I can list tickets:\n\n`;
+          for (const m of missing) {
+            out += `  - ${m}\n`;
+          }
+          out += `\nPlease provide the missing details, or use set_preferences to save defaults for future queries.`;
+          return textResponse(out);
+        }
 
         const clauses = [];
         if (project) clauses.push(`project = "${project}"`);
