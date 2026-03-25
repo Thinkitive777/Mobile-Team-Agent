@@ -315,6 +315,153 @@ class JiraClient {
     }));
   }
 
+  // ── Write operations ─────────────────────────────────────────────────
+
+  async getTransitions(issueKey) {
+    Logger.debug('Fetching transitions', { issueKey });
+    const response = await this._fetchWithRetry(
+      `${this.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}/transitions`
+    );
+    const data = await response.json();
+    return (data.transitions || []).map(t => ({
+      id: t.id,
+      name: t.name,
+      to: t.to?.name || null,
+      toCategory: t.to?.statusCategory?.name || null,
+    }));
+  }
+
+  async transitionTicket(issueKey, transitionNameOrId) {
+    Logger.info('Transitioning ticket', { issueKey, transition: transitionNameOrId });
+    // First get available transitions
+    const transitions = await this.getTransitions(issueKey);
+    const match = transitions.find(t =>
+      t.id === transitionNameOrId ||
+      t.name.toLowerCase() === transitionNameOrId.toLowerCase() ||
+      (t.to && t.to.toLowerCase() === transitionNameOrId.toLowerCase())
+    );
+    if (!match) {
+      const available = transitions.map(t => `"${t.name}" → ${t.to}`).join(', ');
+      throw new JiraConnectionError(
+        `No matching transition "${transitionNameOrId}" for ${issueKey}. Available: ${available}`
+      );
+    }
+    await this._fetchWithRetry(
+      `${this.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}/transitions`,
+      { method: 'POST', body: JSON.stringify({ transition: { id: match.id } }) }
+    );
+    return { success: true, from: null, to: match.to, transitionName: match.name };
+  }
+
+  async addComment(issueKey, bodyText) {
+    Logger.info('Adding comment', { issueKey });
+    // Jira Cloud requires ADF format for comments
+    const adfBody = {
+      type: 'doc',
+      version: 1,
+      content: [{
+        type: 'paragraph',
+        content: [{ type: 'text', text: bodyText }],
+      }],
+    };
+    const response = await this._fetchWithRetry(
+      `${this.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment`,
+      { method: 'POST', body: JSON.stringify({ body: adfBody }) }
+    );
+    const data = await response.json();
+    return {
+      success: true,
+      commentId: data.id,
+      author: data.author?.displayName || 'Unknown',
+      created: data.created,
+    };
+  }
+
+  async assignTicket(issueKey, accountId) {
+    Logger.info('Assigning ticket', { issueKey, accountId });
+    await this._fetchWithRetry(
+      `${this.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}/assignee`,
+      { method: 'PUT', body: JSON.stringify({ accountId: accountId || null }) }
+    );
+    return { success: true, assignedTo: accountId || 'Unassigned' };
+  }
+
+  async createTicket(projectKey, summary, issueType = 'Task', description = '', priority = 'Medium', extras = {}) {
+    Logger.info('Creating ticket', { projectKey, summary, issueType });
+    const fields = {
+      project: { key: projectKey },
+      summary,
+      issuetype: { name: issueType },
+      priority: { name: priority },
+    };
+    if (description) {
+      fields.description = {
+        type: 'doc',
+        version: 1,
+        content: [{
+          type: 'paragraph',
+          content: [{ type: 'text', text: description }],
+        }],
+      };
+    }
+    if (extras.assignee) fields.assignee = { accountId: extras.assignee };
+    if (extras.labels) fields.labels = extras.labels;
+    if (extras.duedate) fields.duedate = extras.duedate;
+    if (extras.parent) fields.parent = { key: extras.parent };
+
+    const response = await this._fetchWithRetry(
+      `${this.baseUrl}/rest/api/3/issue`,
+      { method: 'POST', body: JSON.stringify({ fields }) }
+    );
+    const data = await response.json();
+    return {
+      success: true,
+      key: data.key,
+      id: data.id,
+      self: data.self,
+    };
+  }
+
+  async searchUsers(query, maxResults = 10) {
+    Logger.debug('Searching users', { query });
+    const response = await this._fetchWithRetry(
+      `${this.baseUrl}/rest/api/3/user/search?query=${encodeURIComponent(query)}&maxResults=${maxResults}`
+    );
+    const data = await response.json();
+    return (Array.isArray(data) ? data : []).map(u => ({
+      accountId: u.accountId,
+      displayName: u.displayName || 'Unknown',
+      email: u.emailAddress || null,
+      active: u.active !== false,
+    }));
+  }
+
+  async logWork(issueKey, timeSpent, comment = '') {
+    Logger.info('Logging work', { issueKey, timeSpent });
+    const body = { timeSpent };
+    if (comment) {
+      body.comment = {
+        type: 'doc',
+        version: 1,
+        content: [{
+          type: 'paragraph',
+          content: [{ type: 'text', text: comment }],
+        }],
+      };
+    }
+    const response = await this._fetchWithRetry(
+      `${this.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}/worklog`,
+      { method: 'POST', body: JSON.stringify(body) }
+    );
+    const data = await response.json();
+    return {
+      success: true,
+      worklogId: data.id,
+      timeSpent: data.timeSpent,
+      author: data.author?.displayName || 'Unknown',
+    };
+  }
+
   maskToken() {
     if (!this.token || this.token.length <= 4) return 'tok_****';
     return `tok_****${this.token.slice(-4)}`;

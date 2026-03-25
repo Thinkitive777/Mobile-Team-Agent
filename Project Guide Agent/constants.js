@@ -7,7 +7,7 @@ const os = require('os');
  */
 module.exports = Object.freeze({
   // Version
-  VERSION: '3.0.0',
+  VERSION: '3.1.0',
 
   // File system paths
   CONFIG_DIR: path.join(os.homedir(), '.projectguide-agent'),

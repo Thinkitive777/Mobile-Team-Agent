@@ -325,10 +325,112 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
 
+    // ── Ticket Actions (Write) ──
+    {
+      name: "list_tickets",
+      description: "List Jira tickets with flexible filters. Simpler alternative to smart_ticket_query — doesn't require project/sprint. Great for quick lookups like 'my tickets this week', 'all bugs', 'overdue tasks'.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          assignee: { type: "string", description: "Filter by assignee ('me' or 'currentUser' for yourself, or a name)" },
+          status: { type: "string", description: "Comma-separated statuses (e.g. 'To Do,In Progress')" },
+          priority: { type: "string", description: "Comma-separated priorities (e.g. 'High,Highest')" },
+          project: { type: "string", description: "Project key (e.g. PROJ)" },
+          sprint: { type: "string", description: "Sprint name" },
+          type: { type: "string", description: "Issue type filter (Bug, Story, Task, Epic)" },
+          updated_since: { type: "string", description: "Updated since (e.g. '-7d', '-1w', 'startOfWeek()')" },
+          due_this_week: { type: "boolean", description: "Only show tickets due this week" },
+          include_done: { type: "boolean", description: "Include completed tickets (default: false)" },
+          jql: { type: "string", description: "Raw JQL (overrides all other filters)" },
+          max_results: { type: "number", description: "Max results to return (default: 50)" },
+        },
+      },
+    },
+    {
+      name: "transition_ticket",
+      description: "Move a Jira ticket to a new status (e.g. 'To Do' → 'In Progress' → 'Done'). Shows available transitions if no target specified.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ticket_key: { type: "string", description: "Jira ticket key (e.g. PROJ-123)" },
+          status: { type: "string", description: "Target status name (e.g. 'In Progress', 'Done'). Omit to see available transitions." },
+        },
+        required: ["ticket_key"],
+      },
+    },
+    {
+      name: "add_comment",
+      description: "Add a comment to a Jira ticket. Use for progress updates, notes, or questions.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ticket_key: { type: "string", description: "Jira ticket key (e.g. PROJ-123)" },
+          comment: { type: "string", description: "Comment text to add" },
+        },
+        required: ["ticket_key", "comment"],
+      },
+    },
+    {
+      name: "assign_ticket",
+      description: "Assign a Jira ticket to a user. Use search_users to find the account ID first.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ticket_key: { type: "string", description: "Jira ticket key (e.g. PROJ-123)" },
+          account_id: { type: "string", description: "Jira account ID of the assignee. Use search_users to find it." },
+          assign_to_me: { type: "boolean", description: "Set true to assign to the currently authenticated user" },
+        },
+        required: ["ticket_key"],
+      },
+    },
+    {
+      name: "create_ticket",
+      description: "Create a new Jira ticket. Returns the new ticket key.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project: { type: "string", description: "Project key (e.g. PROJ). Uses saved preference if omitted." },
+          summary: { type: "string", description: "Ticket title/summary" },
+          type: { type: "string", description: "Issue type: Bug, Story, Task, Sub-task, Epic (default: Task)" },
+          description: { type: "string", description: "Detailed description" },
+          priority: { type: "string", description: "Priority: Highest, High, Medium, Low, Lowest (default: Medium)" },
+          assignee: { type: "string", description: "Account ID to assign to (omit for unassigned)" },
+          labels: { type: "string", description: "Comma-separated labels" },
+          due_date: { type: "string", description: "Due date (YYYY-MM-DD)" },
+          parent: { type: "string", description: "Parent ticket key (for Sub-tasks)" },
+        },
+        required: ["summary"],
+      },
+    },
+    {
+      name: "search_users",
+      description: "Search for Jira users by name or email. Useful for finding account IDs for assignment.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search query (name or email)" },
+        },
+        required: ["query"],
+      },
+    },
+    {
+      name: "log_work",
+      description: "Log time spent on a Jira ticket. Use Jira time format (e.g. '2h', '1d', '30m').",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ticket_key: { type: "string", description: "Jira ticket key (e.g. PROJ-123)" },
+          time_spent: { type: "string", description: "Time spent in Jira format (e.g. '2h', '1d 4h', '30m')" },
+          comment: { type: "string", description: "Optional work description" },
+        },
+        required: ["ticket_key", "time_spent"],
+      },
+    },
+
     // ── Legacy ──
     {
       name: "run_skill",
-      description: "Execute a skill: developer-mode, file-info.",
+      description: "Execute a skill: developer-mode, file-info, or route to other tools (list-projects, list-sprints, list-tickets, etc.).",
       inputSchema: {
         type: "object",
         properties: {
@@ -1400,6 +1502,251 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return textResponse(`Preferences updated: ${changes.join(', ')}.\nThese will be remembered across sessions.`);
       }
 
+      // ── list_tickets ──────────────────────────────────────────────────
+      case "list_tickets": {
+        const client = getJiraClient();
+        let jqlString;
+
+        if (args.jql) {
+          jqlString = args.jql;
+        } else {
+          const clauses = [];
+
+          // Assignee
+          const assignee = args.assignee || 'me';
+          if (assignee === 'me' || assignee === 'currentUser') {
+            clauses.push('assignee = currentUser()');
+          } else {
+            clauses.push(`assignee = "${assignee}"`);
+          }
+
+          // Project
+          const project = args.project || preferences.last_project;
+          if (project) clauses.push(`project = "${project}"`);
+
+          // Sprint
+          if (args.sprint) clauses.push(`sprint = "${args.sprint}"`);
+
+          // Status
+          if (args.status) {
+            const statuses = args.status.split(",").map(s => `"${s.trim()}"`).join(",");
+            clauses.push(`status in (${statuses})`);
+          }
+
+          // Exclude done by default
+          if (!args.include_done && !args.status) {
+            clauses.push('statusCategory != Done');
+          }
+
+          // Priority
+          if (args.priority) {
+            const priorities = args.priority.split(",").map(p => `"${p.trim()}"`).join(",");
+            clauses.push(`priority in (${priorities})`);
+          }
+
+          // Issue type
+          if (args.type) {
+            clauses.push(`issuetype = "${args.type}"`);
+          }
+
+          // Updated since
+          if (args.updated_since) {
+            clauses.push(`updated >= "${args.updated_since}"`);
+          }
+
+          // Due this week
+          if (args.due_this_week) {
+            clauses.push('duedate >= startOfWeek() AND duedate <= endOfWeek()');
+          }
+
+          jqlString = clauses.join(' AND ') + ' ORDER BY priority DESC, duedate ASC';
+        }
+
+        const maxResults = args.max_results || CONST.JIRA_MAX_RESULTS;
+        const result = await client.searchTickets(jqlString, [
+          ...CONST.JIRA_DEFAULT_FIELDS, 'issuetype'
+        ], maxResults);
+        const tickets = result.tickets;
+
+        if (tickets.length === 0) {
+          return textResponse(`No tickets found.\nQuery: ${jqlString}`);
+        }
+
+        const now = new Date();
+        let out = `Prioritized Ticket List:\n\n`;
+
+        // Sort by: overdue first, then priority, then due date
+        const priorityOrder = { Highest: 0, High: 1, Medium: 2, Low: 3, Lowest: 4 };
+        const sorted = [...tickets].sort((a, b) => {
+          const aOverdue = a.dueDate && new Date(a.dueDate) < now && a.statusCategory !== 'Done';
+          const bOverdue = b.dueDate && new Date(b.dueDate) < now && b.statusCategory !== 'Done';
+          if (aOverdue && !bOverdue) return -1;
+          if (!aOverdue && bOverdue) return 1;
+          const pa = priorityOrder[a.priority] ?? 2;
+          const pb = priorityOrder[b.priority] ?? 2;
+          if (pa !== pb) return pa - pb;
+          if (a.dueDate && b.dueDate) return new Date(a.dueDate) - new Date(b.dueDate);
+          if (a.dueDate) return -1;
+          if (b.dueDate) return 1;
+          return 0;
+        });
+
+        for (const t of sorted) {
+          const dueDate = t.dueDate ? new Date(t.dueDate) : null;
+          const overdue = dueDate && dueDate < now && t.statusCategory !== 'Done';
+          const blocked = isTicketBlocked(t);
+          const tags = [];
+          if (overdue) tags.push('OVERDUE');
+          if (blocked) tags.push('BLOCKED');
+          if (t.status === 'In Progress') tags.push('IN PROGRESS');
+
+          const dueFmt = t.dueDate ? ` (Due: ${t.dueDate})` : '';
+          const tagStr = tags.length > 0 ? ` [${tags.join(', ')}]` : '';
+
+          out += `- [${t.priority}] ${t.key}: ${t.summary}${dueFmt}${tagStr} via Jira\n`;
+          out += `   Status: ${t.status} | Type: ${t.issueType || 'Task'} | Assignee: ${t.assignee}\n`;
+        }
+
+        out += `\nShowing ${tickets.length}`;
+        if (result.total > tickets.length) out += ` of ${result.total}`;
+        out += ` ticket(s).\n`;
+
+        // Quick insights
+        const overdue = sorted.filter(t => t.dueDate && new Date(t.dueDate) < now && t.statusCategory !== 'Done');
+        const blockedCount = sorted.filter(t => isTicketBlocked(t)).length;
+        if (overdue.length > 0 || blockedCount > 0) {
+          out += `\nAlerts:`;
+          if (overdue.length > 0) out += ` ${overdue.length} overdue`;
+          if (blockedCount > 0) out += ` ${blockedCount} blocked`;
+          out += `\n`;
+        }
+
+        return textResponse(out);
+      }
+
+      // ── transition_ticket ──────────────────────────────────────────────
+      case "transition_ticket": {
+        const keyCheck = validate(ticketKeySchema, args.ticket_key);
+        if (!keyCheck.success) return errorResponse(keyCheck.error);
+
+        const client = getJiraClient();
+
+        // If no status given, show available transitions
+        if (!args.status) {
+          const transitions = await client.getTransitions(args.ticket_key);
+          if (transitions.length === 0) {
+            return textResponse(`No transitions available for ${args.ticket_key}. The ticket may already be in a final state.`);
+          }
+          let out = `Available transitions for ${args.ticket_key}:\n\n`;
+          for (const t of transitions) {
+            out += `  - "${t.name}" → ${t.to}\n`;
+          }
+          out += `\nUse transition_ticket with the status name to move the ticket.\n`;
+          return textResponse(out);
+        }
+
+        const result = await client.transitionTicket(args.ticket_key, args.status);
+        return textResponse(`${args.ticket_key} moved to "${result.to}" (transition: ${result.transitionName})`);
+      }
+
+      // ── add_comment ────────────────────────────────────────────────────
+      case "add_comment": {
+        const keyCheck = validate(ticketKeySchema, args.ticket_key);
+        if (!keyCheck.success) return errorResponse(keyCheck.error);
+        if (!args.comment || !args.comment.trim()) return errorResponse("Comment text is required.");
+
+        const client = getJiraClient();
+        const result = await client.addComment(args.ticket_key, args.comment);
+        return textResponse(`Comment added to ${args.ticket_key} by ${result.author} at ${result.created}`);
+      }
+
+      // ── assign_ticket ──────────────────────────────────────────────────
+      case "assign_ticket": {
+        const keyCheck = validate(ticketKeySchema, args.ticket_key);
+        if (!keyCheck.success) return errorResponse(keyCheck.error);
+
+        const client = getJiraClient();
+
+        let accountId = args.account_id || null;
+
+        // If assign_to_me, get current user's account ID
+        if (args.assign_to_me) {
+          const me = await client.testConnection();
+          accountId = me.accountId;
+        }
+
+        if (!accountId && !args.assign_to_me) {
+          return errorResponse("Provide account_id or set assign_to_me=true. Use search_users to find account IDs.");
+        }
+
+        const result = await client.assignTicket(args.ticket_key, accountId);
+        return textResponse(`${args.ticket_key} assigned to ${result.assignedTo}`);
+      }
+
+      // ── create_ticket ──────────────────────────────────────────────────
+      case "create_ticket": {
+        if (!args.summary || !args.summary.trim()) return errorResponse("Summary is required.");
+
+        const project = args.project || preferences.last_project;
+        if (!project) return errorResponse("Project key is required. Use list_projects to see available projects, or set_preferences to save a default.");
+
+        const client = getJiraClient();
+        const extras = {};
+        if (args.assignee) extras.assignee = args.assignee;
+        if (args.labels) extras.labels = args.labels.split(",").map(l => l.trim());
+        if (args.due_date) extras.duedate = args.due_date;
+        if (args.parent) extras.parent = args.parent;
+
+        const result = await client.createTicket(
+          project,
+          args.summary,
+          args.type || 'Task',
+          args.description || '',
+          args.priority || 'Medium',
+          extras
+        );
+
+        let out = `Ticket created: ${result.key}\n`;
+        out += `Project: ${project} | Type: ${args.type || 'Task'} | Priority: ${args.priority || 'Medium'}\n`;
+        out += `Summary: ${args.summary}\n`;
+        if (args.due_date) out += `Due: ${args.due_date}\n`;
+        out += `\nView in Jira: ${config.jira.url || process.env.JIRA_URL}/browse/${result.key}`;
+        return textResponse(out);
+      }
+
+      // ── search_users ───────────────────────────────────────────────────
+      case "search_users": {
+        if (!args.query || !args.query.trim()) return errorResponse("Search query is required.");
+
+        const client = getJiraClient();
+        const users = await client.searchUsers(args.query);
+
+        if (users.length === 0) {
+          return textResponse(`No users found matching "${args.query}".`);
+        }
+
+        let out = `Users matching "${args.query}":\n\n`;
+        for (const u of users) {
+          out += `  - ${u.displayName}`;
+          if (u.email) out += ` (${u.email})`;
+          out += `\n    Account ID: ${u.accountId}`;
+          if (!u.active) out += ` [INACTIVE]`;
+          out += `\n`;
+        }
+        return textResponse(out);
+      }
+
+      // ── log_work ───────────────────────────────────────────────────────
+      case "log_work": {
+        const keyCheck = validate(ticketKeySchema, args.ticket_key);
+        if (!keyCheck.success) return errorResponse(keyCheck.error);
+        if (!args.time_spent || !args.time_spent.trim()) return errorResponse("time_spent is required (e.g. '2h', '1d', '30m').");
+
+        const client = getJiraClient();
+        const result = await client.logWork(args.ticket_key, args.time_spent, args.comment || '');
+        return textResponse(`Logged ${result.timeSpent} on ${args.ticket_key} by ${result.author}`);
+      }
+
       // ── run_skill ─────────────────────────────────────────────────────
       case "run_skill": {
         const { skill, args: skillArgs } = args;
@@ -1422,7 +1769,60 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
 
-        return errorResponse(`Unknown skill: ${skill}`);
+        // Smart routing: map common skill names to actual tools
+        const skillRoutes = {
+          'list-projects': 'list_projects',
+          'list_projects': 'list_projects',
+          'projects': 'list_projects',
+          'jira-projects': 'list_projects',
+          'list-sprints': 'list_sprints',
+          'list_sprints': 'list_sprints',
+          'sprints': 'list_sprints',
+          'list-tickets': 'list_tickets',
+          'list_tickets': 'list_tickets',
+          'tickets': 'list_tickets',
+          'my-tickets': 'list_tickets',
+          'workload': 'analyze_workload',
+          'analyze-workload': 'analyze_workload',
+          'standup': 'morning_standup',
+          'morning': 'morning_standup',
+          'eod': 'end_of_day_report',
+          'health': 'health_check',
+          'health-check': 'health_check',
+          'suggestions': 'get_ticket_suggestions',
+          'suggest': 'get_ticket_suggestions',
+          'status': 'get_setup_status',
+          'setup': 'get_setup_status',
+          'preferences': 'set_preferences',
+          'search-users': 'search_users',
+          'users': 'search_users',
+        };
+
+        const normalizedSkill = skill.toLowerCase().trim();
+        const routedTool = skillRoutes[normalizedSkill];
+
+        if (routedTool) {
+          return textResponse(
+            `The skill "${skill}" maps to the tool "${routedTool}". Please call "${routedTool}" directly instead.\n\n` +
+            `Hint: Use the "${routedTool}" tool with appropriate parameters.`
+          );
+        }
+
+        // If still not found, provide helpful guidance
+        const availableSkills = ['developer-mode', 'file-info'];
+        const availableTools = [
+          'list_projects', 'list_sprints', 'list_tickets', 'smart_ticket_query',
+          'get_ticket_details', 'get_ticket_suggestions', 'select_ticket',
+          'transition_ticket', 'add_comment', 'assign_ticket', 'create_ticket',
+          'search_users', 'log_work', 'analyze_workload', 'morning_standup',
+          'end_of_day_report', 'health_check', 'set_preferences',
+        ];
+        return errorResponse(
+          `Unknown skill: "${skill}".\n\n` +
+          `Available skills: ${availableSkills.join(', ')}\n` +
+          `Available tools: ${availableTools.join(', ')}\n\n` +
+          `Try calling the appropriate tool directly instead of using run_skill.`
+        );
       }
 
       default:
