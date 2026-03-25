@@ -8,15 +8,14 @@ An intelligent developer assistant that integrates Jira, Git, and daily workflow
 
 ### Mac / Linux
 ```bash
-unzip projectguide-agent-dist.zip
-cd projectguide-agent-dist
-chmod +x install.sh
-./install.sh
+mkdir projectguide-agent && cd projectguide-agent
+unzip ../projectguide-agent-dist.zip
+chmod +x install.sh && ./install.sh
 ```
 
 ### Windows
 ```
-1. Unzip projectguide-agent-dist.zip
+1. Unzip projectguide-agent-dist.zip into a folder
 2. Double-click install.bat
 ```
 
@@ -53,9 +52,11 @@ After invoking, connect your tools:
 ## How It Works
 
 The installer:
-1. Copies the agent binary (or source + Node.js) to `~/.projectguide-agent/`
-2. Registers the MCP server at **user scope** with Claude CLI
-3. Installs agent instructions to `~/.claude/CLAUDE.md`
+1. Copies the agent binary to `~/.projectguide-agent/` (falls back to Node.js source if binary fails)
+2. Verifies the binary responds to MCP protocol before proceeding
+3. Registers the MCP server at **user scope** via `claude mcp add -s user` (writes to `~/.claude.json`)
+4. Verifies registration succeeded, with a direct `~/.claude.json` fallback if the CLI command fails
+5. Installs agent instructions to `~/.claude/CLAUDE.md`
 
 This means any `claude` session in any directory will have access to the agent.
 
@@ -75,8 +76,7 @@ This means any `claude` session in any directory will have access to the agent.
 
 ### Mac / Linux
 ```bash
-chmod +x uninstall.sh
-./uninstall.sh
+chmod +x uninstall.sh && ./uninstall.sh
 ```
 
 ### Windows
@@ -84,7 +84,7 @@ chmod +x uninstall.sh
 Double-click uninstall.bat
 ```
 
-This removes the binary, MCP registration, global CLAUDE.md entries, and PATH additions. Daily reports can be optionally preserved.
+This removes the binary, MCP registration from `~/.claude.json`, global CLAUDE.md entries, and PATH additions. Daily reports can be optionally preserved.
 
 ## For Developers
 
