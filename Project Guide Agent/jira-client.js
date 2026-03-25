@@ -197,6 +197,7 @@ class JiraClient {
       status: f.status?.name || 'Unknown',
       statusCategory: f.status?.statusCategory?.name || 'Unknown',
       priority: f.priority?.name || 'Medium',
+      issueType: f.issuetype?.name || 'Task',
       assignee: f.assignee?.displayName || 'Unassigned',
       dueDate: f.duedate || null,
       created: f.created,
@@ -265,6 +266,53 @@ class JiraClient {
         })),
       })),
     };
+  }
+
+  // ── Projects, Boards & Sprints ──────────────────────────────────────
+
+  async getProjects() {
+    Logger.debug('Fetching Jira projects');
+    const response = await this._fetchWithRetry(
+      `${this.baseUrl}/rest/api/3/project/search?maxResults=50&orderBy=name`
+    );
+    const data = await response.json();
+    return (data.values || []).map(p => ({
+      key: p.key,
+      name: p.name,
+      projectTypeKey: p.projectTypeKey || 'software',
+      style: p.style || 'classic',
+    }));
+  }
+
+  async getBoards(projectKey) {
+    Logger.debug('Fetching boards', { projectKey });
+    const url = projectKey
+      ? `${this.baseUrl}/rest/agile/1.0/board?projectKeyOrId=${encodeURIComponent(projectKey)}&maxResults=50`
+      : `${this.baseUrl}/rest/agile/1.0/board?maxResults=50`;
+    const response = await this._fetchWithRetry(url);
+    const data = await response.json();
+    return (data.values || []).map(b => ({
+      id: b.id,
+      name: b.name,
+      type: b.type,
+      projectKey: b.location?.projectKey || null,
+    }));
+  }
+
+  async getSprints(boardId, state = 'active,future') {
+    Logger.debug('Fetching sprints', { boardId, state });
+    const response = await this._fetchWithRetry(
+      `${this.baseUrl}/rest/agile/1.0/board/${boardId}/sprint?state=${state}&maxResults=20`
+    );
+    const data = await response.json();
+    return (data.values || []).map(s => ({
+      id: s.id,
+      name: s.name,
+      state: s.state,
+      startDate: s.startDate || null,
+      endDate: s.endDate || null,
+      goal: s.goal || null,
+    }));
   }
 
   maskToken() {

@@ -1,7 +1,7 @@
 {
   "name": "project-guide-agent",
-  "version": "2.1.0",
-  "description": "Production-ready developer assistant with Jira + Git integration, daily automation, and intelligent workflow management",
+  "version": "3.0.0",
+  "description": "Context-aware, memory-driven developer assistant with Jira + Git integration, smart ticket guidance, persistent preferences, and intelligent workflow automation",
   "main": "index.js",
   "bin": "index.js",
   "scripts": {

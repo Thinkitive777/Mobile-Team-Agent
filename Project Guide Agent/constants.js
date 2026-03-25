@@ -7,11 +7,12 @@ const os = require('os');
  */
 module.exports = Object.freeze({
   // Version
-  VERSION: '2.1.0',
+  VERSION: '3.0.0',
 
   // File system paths
   CONFIG_DIR: path.join(os.homedir(), '.projectguide-agent'),
   CONFIG_FILE: path.join(os.homedir(), '.projectguide-agent', 'config.json'),
+  PREFERENCES_FILE: path.join(os.homedir(), '.projectguide-agent', 'preferences.json'),
   REPORTS_DIR: path.join(os.homedir(), '.projectguide-agent', 'daily-reports'),
   CONFIG_FILE_PERMISSIONS: 0o600,
   REPORT_FILE_PERMISSIONS: 0o600,

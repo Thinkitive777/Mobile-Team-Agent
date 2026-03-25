@@ -49,6 +49,34 @@ function saveConfig() {
   }
 }
 
+// ── Preferences (persisted across sessions) ──────────────────────────
+
+let preferences = {
+  last_project: null,
+  last_sprint: null,
+  last_board_id: null,
+  last_assignee: null,
+  greeting_name: null,
+};
+
+if (fs.existsSync(CONST.PREFERENCES_FILE)) {
+  try {
+    preferences = { ...preferences, ...JSON.parse(fs.readFileSync(CONST.PREFERENCES_FILE, "utf-8")) };
+  } catch (e) {
+    Logger.error("Preferences file corrupted, using defaults", { error: e.message });
+  }
+}
+
+function savePreferences() {
+  try {
+    fs.writeFileSync(CONST.PREFERENCES_FILE, JSON.stringify(preferences, null, 2), {
+      mode: CONST.CONFIG_FILE_PERMISSIONS,
+    });
+  } catch (err) {
+    Logger.error("Failed to save preferences", { error: err.message });
+  }
+}
+
 function maskToken(token) {
   if (!token || token === "********" || token.length <= 4) return "tok_****";
   return `tok_****${token.slice(-4)}`;
@@ -231,6 +259,72 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: { type: "object", properties: {} },
     },
 
+    // ── Smart Workflow ──
+    {
+      name: "list_projects",
+      description: "List all Jira projects accessible to the user. Remembers last selected project.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "list_sprints",
+      description: "List active/future sprints for a project. Auto-detects board from project key. Remembers last selected sprint.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project_key: { type: "string", description: "Jira project key (e.g. PROJ). Uses last project if omitted." },
+        },
+      },
+    },
+    {
+      name: "smart_ticket_query",
+      description: "Interactive ticket search with categorized output (Bugs/Stories/Tasks/Subtasks). Groups by type, shows priority/status/due date, and suggests which tickets to start based on priority and deadlines.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project: { type: "string", description: "Project key (uses last project if omitted)" },
+          sprint: { type: "string", description: "Sprint name (uses last sprint if omitted)" },
+          assignee: { type: "string", description: "Assignee (default: currentUser)" },
+          status: { type: "string", description: "Comma-separated statuses" },
+          priority: { type: "string", description: "Filter by priority (e.g. 'High,Highest')" },
+        },
+      },
+    },
+    {
+      name: "get_ticket_suggestions",
+      description: "Analyze assigned tickets and provide intelligent suggestions on what to work on next. Considers priority, deadlines, dependencies, blockers, and current progress.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project: { type: "string", description: "Project key (uses last project if omitted)" },
+        },
+      },
+    },
+    {
+      name: "select_ticket",
+      description: "Select a ticket to work on. Returns full details with description, comments, and a generated implementation plan. Ask for confirmation before proceeding.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ticket_key: { type: "string", description: "Jira ticket key (e.g. PROJ-123)" },
+        },
+        required: ["ticket_key"],
+      },
+    },
+    {
+      name: "set_preferences",
+      description: "Save user preferences (project, sprint, assignee, greeting name) for persistent memory across sessions.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project: { type: "string", description: "Default project key" },
+          sprint: { type: "string", description: "Default sprint name" },
+          board_id: { type: "number", description: "Default board ID" },
+          assignee: { type: "string", description: "Default assignee" },
+          greeting_name: { type: "string", description: "User's name for greetings" },
+        },
+      },
+    },
+
     // ── Legacy ──
     {
       name: "run_skill",
@@ -284,25 +378,58 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // ── get_setup_status ──────────────────────────────────────────────
       case "get_setup_status": {
-        const status = {
-          version: CONST.VERSION,
-          jira: {
-            connected: config.jira.connected || !!process.env.JIRA_URL,
-            url: config.jira.url || process.env.JIRA_URL || null,
-            email: config.jira.email || process.env.JIRA_EMAIL || null,
-            token: maskToken(config.jira.token || process.env.JIRA_TOKEN),
-          },
-          github: {
-            connected: config.github.connected || !!process.env.GITHUB_TOKEN,
-            user: config.github.user || process.env.GITHUB_USER || null,
-          },
-          reports: {
-            directory: ReportManager.REPORTS_DIR,
-            count: ReportManager.listReports().length,
-          },
-          developer_mode: config.developer_mode,
-        };
-        return textResponse(JSON.stringify(status, null, 2));
+        const jiraConnected = config.jira.connected || !!process.env.JIRA_URL;
+        const githubConnected = config.github.connected || !!process.env.GITHUB_TOKEN;
+
+        let out = `Project Guide Agent v${CONST.VERSION} — Setup Status\n\n`;
+
+        // Connection status
+        out += `--- Connections ---\n`;
+        out += `Jira: ${jiraConnected ? 'Connected' : 'Not configured'}\n`;
+        if (jiraConnected) {
+          out += `  URL: ${config.jira.url || process.env.JIRA_URL}\n`;
+          out += `  Email: ${config.jira.email || process.env.JIRA_EMAIL}\n`;
+          out += `  Token: ${maskToken(config.jira.token || process.env.JIRA_TOKEN)}\n`;
+        }
+        out += `GitHub: ${githubConnected ? 'Connected' : 'Not configured'}\n`;
+        if (githubConnected) {
+          out += `  User: ${config.github.user || process.env.GITHUB_USER || 'via token'}\n`;
+        }
+        out += `\n`;
+
+        // Preferences
+        out += `--- Preferences (persistent) ---\n`;
+        out += `Project: ${preferences.last_project || 'not set'}\n`;
+        out += `Sprint: ${preferences.last_sprint || 'not set'}\n`;
+        out += `Greeting Name: ${preferences.greeting_name || 'not set'}\n`;
+        out += `\n`;
+
+        // Reports
+        const reportCount = ReportManager.listReports().length;
+        out += `--- Reports ---\n`;
+        out += `Saved: ${reportCount} daily report(s)\n`;
+        out += `Directory: ${ReportManager.REPORTS_DIR}\n\n`;
+
+        // Next steps — only show what's NOT configured
+        const missing = [];
+        if (!jiraConnected) missing.push("Jira (use 'configure_service' with service='jira')");
+        if (!githubConnected) missing.push("GitHub (use 'configure_service' with service='github')");
+
+        if (missing.length > 0) {
+          out += `--- Setup Needed ---\n`;
+          for (const m of missing) out += `  - ${m}\n`;
+        } else {
+          out += `All services connected!\n`;
+          if (!preferences.last_project) {
+            out += `Next: Use 'list_projects' to select your project.\n`;
+          } else if (!preferences.last_sprint) {
+            out += `Next: Use 'list_sprints' to select your sprint.\n`;
+          } else {
+            out += `Ready to go! Say "Good morning" or use 'smart_ticket_query' to get started.\n`;
+          }
+        }
+
+        return textResponse(out);
       }
 
       // ── configure_service ─────────────────────────────────────────────
@@ -327,7 +454,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         saveConfig();
         Logger.info("Service configured", { service });
-        return textResponse(`${service} configured successfully.`);
+
+        // Auto-test connection after saving
+        let out = `${service} configured successfully.\n`;
+        if (service === "jira") {
+          try {
+            const client = getJiraClient();
+            const result = await client.testConnection();
+            out += `Connection verified! Logged in as: ${result.user} (${result.email})\n\n`;
+            out += `Next steps:\n`;
+            out += `- Use 'list_projects' to select your project\n`;
+            out += `- Use 'morning_standup' to start your day\n`;
+            out += `- Or just say "Good morning!" to get your daily plan\n`;
+          } catch (testErr) {
+            out += `Warning: Connection test failed — ${testErr.message}\n`;
+            out += `Credentials saved but may be incorrect. Use 'jira_connection_test' to debug.\n`;
+          }
+        }
+        return textResponse(out);
       }
 
       // ── jira_connection_test ──────────────────────────────────────────
@@ -371,7 +515,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             : "assignee = currentUser() ORDER BY updated DESC";
         }
 
-        const result = await client.searchTickets(jqlString);
+        const result = await client.searchTickets(jqlString, [
+          ...CONST.JIRA_DEFAULT_FIELDS, 'issuetype'
+        ]);
         const tickets = result.tickets;
 
         let out = `Found ${tickets.length} ticket(s)`;
@@ -380,11 +526,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         out += `\n\n`;
 
+        // Categorize by issue type
+        const categories = {};
         for (const t of tickets) {
-          out += `[${t.priority}] ${t.key}: ${t.summary}\n`;
-          out += `   Status: ${t.status} | Assignee: ${t.assignee}`;
-          if (t.dueDate) out += ` | Due: ${t.dueDate}`;
-          if (t.labels.length > 0) out += ` | Labels: ${t.labels.join(", ")}`;
+          const type = t.issueType || 'Other';
+          if (!categories[type]) categories[type] = [];
+          categories[type].push(t);
+        }
+
+        const typeOrder = ['Bug', 'Story', 'Task', 'Sub-task', 'Epic'];
+        const sortedTypes = Object.keys(categories).sort((a, b) => {
+          const ai = typeOrder.indexOf(a);
+          const bi = typeOrder.indexOf(b);
+          return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+        });
+
+        for (const type of sortedTypes) {
+          const items = categories[type];
+          out += `--- ${type}s (${items.length}) ---\n`;
+          for (const t of items) {
+            out += `  [${t.priority}] ${t.key}: ${t.summary}\n`;
+            out += `     Status: ${t.status} | Assignee: ${t.assignee}`;
+            if (t.dueDate) out += ` | Due: ${t.dueDate}`;
+            if (t.labels.length > 0) out += ` | Labels: ${t.labels.join(", ")}`;
+            out += `\n`;
+          }
           out += `\n`;
         }
 
@@ -644,6 +810,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           for (const item of carryForward) {
             out += `  - ${item}\n`;
           }
+          out += `\n`;
+        }
+
+        // Daily planning prompt
+        const greeting = preferences.greeting_name ? `${preferences.greeting_name}, w` : 'W';
+        out += `--- ${greeting}hat would you like to work on today? ---\n`;
+        if (tickets.length > 0) {
+          const inProgress = tickets.filter(t => t.status === "In Progress");
+          const topPicks = inProgress.length > 0 ? inProgress : tickets.slice(0, 3);
+          out += `Quick picks:\n`;
+          topPicks.forEach((t, i) => {
+            out += `  ${i + 1}. ${t.key}: ${t.summary} [${t.priority}]\n`;
+          });
+          out += `\nSay a ticket key (e.g. "${topPicks[0].key}") to get a full implementation plan.\n`;
+          out += `Or use 'smart_ticket_query' to search by sprint, status, or priority.\n`;
+        } else if (!jiraError) {
+          out += `No pending tickets found. Use 'list_projects' to explore your Jira projects.\n`;
         }
 
         return textResponse(out);
@@ -815,6 +998,391 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let out = `Health Check — ${allOk ? 'ALL OK' : 'ISSUES DETECTED'}\n\n`;
         out += JSON.stringify(results, null, 2);
         return textResponse(out);
+      }
+
+      // ── list_projects ─────────────────────────────────────────────────
+      case "list_projects": {
+        const client = getJiraClient();
+        const projects = await client.getProjects();
+
+        if (projects.length === 0) {
+          return textResponse("No Jira projects found. Check your permissions.");
+        }
+
+        let out = `Available Projects (${projects.length})\n\n`;
+        for (const p of projects) {
+          const isCurrent = preferences.last_project === p.key ? ' (current)' : '';
+          out += `  ${p.key}: ${p.name}${isCurrent}\n`;
+        }
+
+        if (preferences.last_project) {
+          out += `\nLast used project: ${preferences.last_project}\n`;
+        }
+        out += `\nTo select a project, use 'set_preferences' with project key.\n`;
+        out += `Then use 'list_sprints' to see active sprints.\n`;
+
+        return textResponse(out);
+      }
+
+      // ── list_sprints ────────────────────────────────────────────────────
+      case "list_sprints": {
+        const projectKey = args.project_key || preferences.last_project;
+        if (!projectKey) {
+          return errorResponse("No project specified. Use 'list_projects' first or pass project_key.");
+        }
+
+        const client = getJiraClient();
+
+        // Find board for this project
+        let boards;
+        try {
+          boards = await client.getBoards(projectKey);
+        } catch (err) {
+          return errorResponse(`Could not fetch boards for ${projectKey}: ${err.message}`);
+        }
+
+        if (boards.length === 0) {
+          return errorResponse(`No boards found for project ${projectKey}. This project may not use Scrum/Kanban.`);
+        }
+
+        const board = boards[0]; // Use first board
+        let sprints;
+        try {
+          sprints = await client.getSprints(board.id);
+        } catch (err) {
+          return errorResponse(`Could not fetch sprints for board "${board.name}": ${err.message}`);
+        }
+
+        if (sprints.length === 0) {
+          return textResponse(`No active or future sprints found for ${projectKey} (board: ${board.name}).`);
+        }
+
+        let out = `Sprints for ${projectKey} (board: ${board.name})\n\n`;
+        for (const s of sprints) {
+          const isCurrent = preferences.last_sprint === s.name ? ' (current)' : '';
+          const active = s.state === 'active' ? ' [ACTIVE]' : '';
+          out += `  ${s.name}${active}${isCurrent}\n`;
+          if (s.startDate && s.endDate) {
+            out += `    ${s.startDate.substring(0, 10)} to ${s.endDate.substring(0, 10)}\n`;
+          }
+          if (s.goal) out += `    Goal: ${s.goal}\n`;
+        }
+
+        // Auto-save board ID for future use
+        preferences.last_board_id = board.id;
+        if (!preferences.last_project || preferences.last_project !== projectKey) {
+          preferences.last_project = projectKey;
+        }
+        savePreferences();
+
+        out += `\nTo select a sprint, use 'set_preferences' with sprint name.\n`;
+        out += `Then use 'smart_ticket_query' to view tickets in that sprint.\n`;
+
+        return textResponse(out);
+      }
+
+      // ── smart_ticket_query ──────────────────────────────────────────────
+      case "smart_ticket_query": {
+        const client = getJiraClient();
+        const project = args.project || preferences.last_project;
+        const sprint = args.sprint || preferences.last_sprint;
+        const assignee = args.assignee || 'currentUser';
+
+        const clauses = [];
+        if (project) clauses.push(`project = "${project}"`);
+        if (sprint) clauses.push(`sprint = "${sprint}"`);
+        if (assignee === 'currentUser') {
+          clauses.push('assignee = currentUser()');
+        } else if (assignee) {
+          clauses.push(`assignee = "${assignee}"`);
+        }
+        if (args.status) {
+          const statuses = args.status.split(",").map(s => `"${s.trim()}"`).join(",");
+          clauses.push(`status in (${statuses})`);
+        }
+        if (args.priority) {
+          const priorities = args.priority.split(",").map(p => `"${p.trim()}"`).join(",");
+          clauses.push(`priority in (${priorities})`);
+        }
+
+        if (clauses.length === 0) {
+          clauses.push('assignee = currentUser()');
+        }
+
+        const jql = clauses.join(' AND ') + ' ORDER BY priority DESC, duedate ASC';
+        const result = await client.searchTickets(jql, [
+          ...CONST.JIRA_DEFAULT_FIELDS, 'issuetype'
+        ]);
+        const tickets = result.tickets;
+
+        if (tickets.length === 0) {
+          let out = `No tickets found matching your query.\n`;
+          out += `Filters used: ${clauses.join(', ')}\n\n`;
+          out += `Try adjusting your filters or use 'fetch_jira_tickets' with raw JQL.`;
+          return textResponse(out);
+        }
+
+        // Categorize by issue type
+        const categories = { Bug: [], Story: [], Task: [], 'Sub-task': [], Epic: [], Other: [] };
+        const now = new Date();
+
+        for (const t of tickets) {
+          const type = t.issueType || 'Other';
+          const cat = categories[type] || categories['Other'];
+          cat.push(t);
+        }
+
+        let out = `Tickets Found: ${tickets.length}`;
+        if (result.total > tickets.length) out += ` (${result.total} total)`;
+        out += `\n`;
+        if (project) out += `Project: ${project}`;
+        if (sprint) out += ` | Sprint: ${sprint}`;
+        out += `\n\n`;
+
+        for (const [type, items] of Object.entries(categories)) {
+          if (items.length === 0) continue;
+          out += `--- ${type}s (${items.length}) ---\n`;
+          for (const t of items) {
+            const dueDate = t.dueDate ? new Date(t.dueDate) : null;
+            const overdue = dueDate && dueDate < now && t.statusCategory !== 'Done';
+            const overdueTag = overdue ? ' OVERDUE' : '';
+
+            out += `  [${t.priority}] ${t.key}: ${t.summary}\n`;
+            out += `     Status: ${t.status}${overdueTag}`;
+            if (t.dueDate) out += ` | Due: ${t.dueDate}`;
+            out += `\n`;
+          }
+          out += `\n`;
+        }
+
+        // Suggestions
+        const nonDone = tickets.filter(t => t.statusCategory !== 'Done');
+        const overdue = nonDone.filter(t => t.dueDate && new Date(t.dueDate) < now);
+        const highPri = nonDone.filter(t => t.priority === 'Highest' || t.priority === 'High');
+        const inProgress = nonDone.filter(t => t.status === 'In Progress');
+
+        out += `--- Recommendations ---\n`;
+        if (inProgress.length > 0) {
+          out += `Continue working on: ${inProgress[0].key} (${inProgress[0].summary})\n`;
+        }
+        if (overdue.length > 0) {
+          out += `Urgent — overdue: ${overdue.map(t => t.key).join(', ')}\n`;
+        }
+        if (highPri.length > 0 && (!inProgress.length || !highPri.some(t => t.key === inProgress[0]?.key))) {
+          out += `High priority: ${highPri.slice(0, 3).map(t => `${t.key} (${t.summary})`).join(', ')}\n`;
+        }
+        out += `\nSay a ticket key to get full details and an implementation plan.\n`;
+
+        return textResponse(out);
+      }
+
+      // ── get_ticket_suggestions ──────────────────────────────────────────
+      case "get_ticket_suggestions": {
+        const client = getJiraClient();
+        const project = args.project || preferences.last_project;
+
+        const clauses = ['assignee = currentUser()', 'statusCategory != Done'];
+        if (project) clauses.push(`project = "${project}"`);
+
+        const jql = clauses.join(' AND ') + ' ORDER BY priority DESC, duedate ASC';
+        const result = await client.searchTickets(jql, [
+          ...CONST.JIRA_DEFAULT_FIELDS, 'issuetype'
+        ]);
+        const tickets = result.tickets;
+
+        if (tickets.length === 0) {
+          return textResponse("No open tickets assigned to you. You're all caught up!");
+        }
+
+        const now = new Date();
+        const scored = tickets.map(t => {
+          let score = 0;
+
+          // Priority scoring
+          if (t.priority === 'Highest') score += 50;
+          else if (t.priority === 'High') score += 35;
+          else if (t.priority === 'Medium') score += 20;
+          else if (t.priority === 'Low') score += 10;
+          else if (t.priority === 'Lowest') score += 5;
+
+          // Overdue scoring
+          if (t.dueDate) {
+            const due = new Date(t.dueDate);
+            const daysUntilDue = (due - now) / (1000 * 60 * 60 * 24);
+            if (daysUntilDue < 0) score += 40; // overdue
+            else if (daysUntilDue <= 1) score += 30; // due today/tomorrow
+            else if (daysUntilDue <= 3) score += 20; // due this week
+            else if (daysUntilDue <= 7) score += 10;
+          }
+
+          // In-progress gets a boost (continuity)
+          if (t.status === 'In Progress') score += 25;
+
+          // Bug boost (bugs should be fixed quickly)
+          if (t.issueType === 'Bug') score += 15;
+
+          // Blocked penalty
+          if (isTicketBlocked(t)) score -= 30;
+
+          return { ...t, score };
+        });
+
+        scored.sort((a, b) => b.score - a.score);
+
+        let out = `Ticket Suggestions (${scored.length} open tickets)\n\n`;
+
+        // Top 3 recommendations
+        out += `--- Top Recommendations ---\n`;
+        const top = scored.slice(0, 3);
+        top.forEach((t, i) => {
+          const reasons = [];
+          if (t.status === 'In Progress') reasons.push('already started');
+          if (t.priority === 'Highest' || t.priority === 'High') reasons.push('high priority');
+          if (t.dueDate) {
+            const due = new Date(t.dueDate);
+            const daysUntilDue = Math.ceil((due - now) / (1000 * 60 * 60 * 24));
+            if (daysUntilDue < 0) reasons.push(`overdue by ${Math.abs(daysUntilDue)} day(s)`);
+            else if (daysUntilDue <= 1) reasons.push('due today/tomorrow');
+            else if (daysUntilDue <= 3) reasons.push(`due in ${daysUntilDue} days`);
+          }
+          if (t.issueType === 'Bug') reasons.push('bug fix');
+
+          out += `  ${i + 1}. ${t.key}: ${t.summary}\n`;
+          out += `     [${t.priority}] ${t.issueType} | ${t.status}`;
+          if (t.dueDate) out += ` | Due: ${t.dueDate}`;
+          out += `\n`;
+          if (reasons.length > 0) out += `     Why: ${reasons.join(', ')}\n`;
+          out += `\n`;
+        });
+
+        // Blocked tickets
+        const blocked = scored.filter(t => isTicketBlocked(t));
+        if (blocked.length > 0) {
+          out += `--- Blocked (${blocked.length}) ---\n`;
+          for (const t of blocked) {
+            const blockers = (t.issueLinks || [])
+              .filter(l => l.description?.toLowerCase().includes('is blocked by'))
+              .map(l => l.linkedKey);
+            out += `  ${t.key}: ${t.summary} — blocked by: ${blockers.join(', ') || 'flagged'}\n`;
+          }
+          out += `\n`;
+        }
+
+        out += `Use 'select_ticket' with a ticket key to get an implementation plan.\n`;
+        return textResponse(out);
+      }
+
+      // ── select_ticket ───────────────────────────────────────────────────
+      case "select_ticket": {
+        const keyCheck = validate(ticketKeySchema, args.ticket_key);
+        if (!keyCheck.success) return errorResponse(keyCheck.error);
+
+        const client = getJiraClient();
+        const t = await client.getTicket(args.ticket_key);
+
+        let out = `Selected Ticket: ${t.key}\n`;
+        out += `${'='.repeat(50)}\n\n`;
+
+        // Full details
+        out += `Title: ${t.summary}\n`;
+        out += `Type: ${t.statusCategory} | Status: ${t.status} | Priority: ${t.priority}\n`;
+        out += `Assignee: ${t.assignee}`;
+        if (t.dueDate) out += ` | Due: ${t.dueDate}`;
+        out += `\n`;
+        if (t.labels.length > 0) out += `Labels: ${t.labels.join(", ")}\n`;
+        out += `\n`;
+
+        // Description
+        out += `--- Description ---\n`;
+        out += `${t.description}\n\n`;
+
+        // Subtasks
+        if (t.subtasks.length > 0) {
+          out += `--- Subtasks (${t.subtasks.length}) ---\n`;
+          for (const st of t.subtasks) {
+            const done = st.status === 'Done' ? 'x' : ' ';
+            out += `  [${done}] ${st.key}: ${st.summary} [${st.status}]\n`;
+          }
+          out += `\n`;
+        }
+
+        // Linked Issues
+        if (t.issueLinks.length > 0) {
+          out += `--- Linked Issues ---\n`;
+          for (const link of t.issueLinks) {
+            out += `  ${link.description}: ${link.linkedKey} [${link.linkedStatus}]\n`;
+          }
+          out += `\n`;
+        }
+
+        // Comments (context for implementation)
+        if (t.comments.length > 0) {
+          out += `--- Recent Comments (${Math.min(t.comments.length, 5)}) ---\n`;
+          for (const c of t.comments.slice(-5)) {
+            const preview = (c.body || '').substring(0, 300);
+            const ellipsis = c.body && c.body.length > 300 ? '...' : '';
+            out += `  ${c.author} (${c.created?.substring(0, 10)}):\n    ${preview}${ellipsis}\n\n`;
+          }
+        }
+
+        // Implementation plan
+        out += `--- Implementation Plan ---\n`;
+        out += `Based on the ticket details above, here's a suggested approach:\n\n`;
+
+        // Determine ticket type for plan guidance
+        const isBug = t.summary.toLowerCase().includes('bug') ||
+                      t.summary.toLowerCase().includes('fix') ||
+                      t.labels.some(l => l.toLowerCase() === 'bug');
+
+        if (isBug) {
+          out += `1. Reproduce the issue described in the ticket\n`;
+          out += `2. Identify the root cause by analyzing the relevant code\n`;
+          out += `3. Implement the fix with minimal changes\n`;
+          out += `4. Add/update tests to cover the bug scenario\n`;
+          out += `5. Verify the fix resolves the issue without side effects\n`;
+        } else if (t.subtasks.length > 0) {
+          out += `Follow the subtask breakdown:\n`;
+          const pending = t.subtasks.filter(st => st.status !== 'Done');
+          for (let i = 0; i < pending.length; i++) {
+            out += `${i + 1}. ${pending[i].key}: ${pending[i].summary}\n`;
+          }
+          if (pending.length === 0) {
+            out += `All subtasks are done! Review and close the parent ticket.\n`;
+          }
+        } else {
+          out += `1. Analyze the requirements from the description\n`;
+          out += `2. Identify affected files and components\n`;
+          out += `3. Implement the changes step by step\n`;
+          out += `4. Write tests for the new functionality\n`;
+          out += `5. Review changes for quality and completeness\n`;
+        }
+
+        out += `\nShall I proceed with this plan? Say "yes" to start or suggest changes.\n`;
+
+        return textResponse(out);
+      }
+
+      // ── set_preferences ─────────────────────────────────────────────────
+      case "set_preferences": {
+        const changes = [];
+        if (args.project) { preferences.last_project = args.project; changes.push(`project: ${args.project}`); }
+        if (args.sprint) { preferences.last_sprint = args.sprint; changes.push(`sprint: ${args.sprint}`); }
+        if (args.board_id) { preferences.last_board_id = args.board_id; changes.push(`board: ${args.board_id}`); }
+        if (args.assignee) { preferences.last_assignee = args.assignee; changes.push(`assignee: ${args.assignee}`); }
+        if (args.greeting_name) { preferences.greeting_name = args.greeting_name; changes.push(`greeting name: ${args.greeting_name}`); }
+
+        if (changes.length === 0) {
+          let out = `Current Preferences:\n`;
+          out += `  Project: ${preferences.last_project || 'not set'}\n`;
+          out += `  Sprint: ${preferences.last_sprint || 'not set'}\n`;
+          out += `  Board ID: ${preferences.last_board_id || 'not set'}\n`;
+          out += `  Assignee: ${preferences.last_assignee || 'not set'}\n`;
+          out += `  Greeting Name: ${preferences.greeting_name || 'not set'}\n`;
+          return textResponse(out);
+        }
+
+        savePreferences();
+        return textResponse(`Preferences updated: ${changes.join(', ')}.\nThese will be remembered across sessions.`);
       }
 
       // ── run_skill ─────────────────────────────────────────────────────
