@@ -129,11 +129,40 @@ if "%INSTALL_MODE%"=="binary" (
     claude mcp add projectguide-agent -s user -- node "%INSTALL_DIR%\src\index.js"
 )
 
-if %ERRORLEVEL% equ 0 (
+:: Verify registration in ~/.claude.json
+set "MCP_REGISTERED=0"
+set "CLAUDE_JSON=%USERPROFILE%\.claude.json"
+findstr /C:"projectguide-agent" "%CLAUDE_JSON%" >nul 2>&1
+if !ERRORLEVEL! equ 0 (
+    set "MCP_REGISTERED=1"
     echo [OK]    MCP server registered globally (user scope^)
-) else (
-    echo [WARN]  MCP registration may have failed. Register manually:
-    echo         claude mcp add projectguide-agent -s user -- "%BIN_DIR%\%BINARY_NAME%"
+)
+
+:: Fallback: write config directly if CLI registration failed
+if "!MCP_REGISTERED!"=="0" (
+    echo [WARN]  CLI registration not detected. Writing config directly...
+    if "%INSTALL_MODE%"=="binary" (
+        set "MCP_CMD=%BIN_DIR%\%BINARY_NAME%"
+    ) else (
+        set "MCP_CMD=node"
+    )
+    powershell -Command ^
+        "$jsonPath = '%CLAUDE_JSON%'; " ^
+        "if (Test-Path $jsonPath) { $config = Get-Content $jsonPath -Raw | ConvertFrom-Json } else { $config = [PSCustomObject]@{} }; " ^
+        "if (-not $config.mcpServers) { $config | Add-Member -NotePropertyName 'mcpServers' -NotePropertyValue ([PSCustomObject]@{}) }; " ^
+        "if ('%INSTALL_MODE%' -eq 'binary') { " ^
+        "  $server = [PSCustomObject]@{ type='stdio'; command='%BIN_DIR:\=\\%\\%BINARY_NAME%'; args=@(); env=[PSCustomObject]@{} } " ^
+        "} else { " ^
+        "  $server = [PSCustomObject]@{ type='stdio'; command='node'; args=@('%INSTALL_DIR:\=\\%\\src\\index.js'); env=[PSCustomObject]@{} } " ^
+        "}; " ^
+        "$config.mcpServers | Add-Member -NotePropertyName 'projectguide-agent' -NotePropertyValue $server -Force; " ^
+        "$config | ConvertTo-Json -Depth 10 | Set-Content $jsonPath"
+    if !ERRORLEVEL! equ 0 (
+        echo [OK]    MCP config written directly to %CLAUDE_JSON%
+    ) else (
+        echo [FAIL]  Could not register MCP server. Please run manually:
+        echo         claude mcp add projectguide-agent -s user -- "%BIN_DIR%\%BINARY_NAME%"
+    )
 )
 
 :: ----------------------------------------------------------

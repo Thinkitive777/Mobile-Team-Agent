@@ -1,5 +1,4 @@
 #!/bin/bash
-set -e
 
 # ============================================================
 # Project Guide Agent — Global Installer (Mac / Linux)
@@ -13,10 +12,14 @@ set -e
 #   4. Any folder on this machine will recognize the agent
 # ============================================================
 
+# Don't use set -e — we handle errors explicitly to avoid silent failures
+# that leave the install half-done without MCP registration
+
 INSTALL_DIR="$HOME/.projectguide-agent"
 BIN_DIR="$INSTALL_DIR/bin"
 BINARY_NAME="projectguide-agent"
 CLAUDE_GLOBAL_DIR="$HOME/.claude"
+CLAUDE_JSON="$HOME/.claude.json"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VERSION="2.1.0"
 
@@ -120,10 +123,35 @@ if [ -f "$SOURCE_BINARY" ]; then
     cp "$SOURCE_BINARY" "$BIN_DIR/$BINARY_NAME"
     chmod +x "$BIN_DIR/$BINARY_NAME"
 
-    # Verify it runs
-    if "$BIN_DIR/$BINARY_NAME" --version &> /dev/null 2>&1 || true; then
+    # Verify the binary actually responds to MCP protocol
+    # Send an MCP initialize request and check for a JSON response
+    BINARY_OK=false
+    VERIFY_OUTPUT=""
+
+    # Test with MCP protocol handshake (binary starts an MCP server on stdio)
+    VERIFY_OUTPUT=$(echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"verify","version":"1.0"}},"id":1}' | {
+        if command -v timeout &> /dev/null; then
+            timeout 10 "$BIN_DIR/$BINARY_NAME" 2>/dev/null
+        else
+            # macOS may not have timeout — use a subshell with background kill
+            "$BIN_DIR/$BINARY_NAME" 2>/dev/null &
+            VPID=$!
+            sleep 5
+            kill $VPID 2>/dev/null
+            wait $VPID 2>/dev/null
+        fi
+    } 2>/dev/null)
+
+    if echo "$VERIFY_OUTPUT" | grep -q "protocolVersion" 2>/dev/null; then
+        BINARY_OK=true
+    fi
+
+    if [ "$BINARY_OK" = true ]; then
         INSTALL_MODE="binary"
-        success "Binary installed to $BIN_DIR/$BINARY_NAME"
+        success "Binary installed and verified at $BIN_DIR/$BINARY_NAME"
+    else
+        warn "Binary does not respond to MCP protocol. Will try source fallback."
+        rm -f "$BIN_DIR/$BINARY_NAME"
     fi
 fi
 
@@ -192,19 +220,94 @@ fi
 # ----------------------------------------------------------
 info "Registering MCP server globally..."
 
-# Remove any existing registration (project or user scope)
+# Remove any existing registration (all scopes)
 claude mcp remove projectguide-agent -s user > /dev/null 2>&1 || true
 claude mcp remove projectguide-agent -s project > /dev/null 2>&1 || true
 claude mcp remove projectguide-agent > /dev/null 2>&1 || true
 
 # Register at USER scope — this makes it available in ALL directories
-claude mcp add projectguide-agent -s user -- "$BIN_DIR/$BINARY_NAME"
-
-if [ $? -eq 0 ]; then
+# The config is written to ~/.claude.json under mcpServers
+if claude mcp add projectguide-agent -s user -- "$BIN_DIR/$BINARY_NAME" 2>&1; then
     success "MCP server registered globally (user scope)"
 else
-    warn "MCP auto-registration may have failed. Register manually:"
-    echo "    claude mcp add projectguide-agent -s user -- $BIN_DIR/$BINARY_NAME"
+    warn "claude mcp add command failed. Attempting direct config write..."
+fi
+
+# Verify registration by checking ~/.claude.json
+MCP_REGISTERED=false
+if [ -f "$CLAUDE_JSON" ]; then
+    if grep -q "projectguide-agent" "$CLAUDE_JSON" 2>/dev/null; then
+        MCP_REGISTERED=true
+    fi
+fi
+
+# Fallback: write directly to ~/.claude.json if CLI registration failed
+if [ "$MCP_REGISTERED" = false ]; then
+    warn "MCP registration not found in $CLAUDE_JSON. Writing config directly..."
+    if [ -f "$CLAUDE_JSON" ]; then
+        # File exists — inject mcpServers entry using python/node
+        if command -v python3 &> /dev/null; then
+            python3 -c "
+import json, sys
+try:
+    with open('$CLAUDE_JSON', 'r') as f:
+        config = json.load(f)
+except:
+    config = {}
+if 'mcpServers' not in config:
+    config['mcpServers'] = {}
+config['mcpServers']['projectguide-agent'] = {
+    'type': 'stdio',
+    'command': '$BIN_DIR/$BINARY_NAME',
+    'args': [],
+    'env': {}
+}
+with open('$CLAUDE_JSON', 'w') as f:
+    json.dump(config, f, indent=2)
+print('OK')
+" && MCP_REGISTERED=true
+        elif command -v node &> /dev/null; then
+            node -e "
+const fs = require('fs');
+let config = {};
+try { config = JSON.parse(fs.readFileSync('$CLAUDE_JSON', 'utf8')); } catch {}
+if (!config.mcpServers) config.mcpServers = {};
+config.mcpServers['projectguide-agent'] = {
+    type: 'stdio',
+    command: '$BIN_DIR/$BINARY_NAME',
+    args: [],
+    env: {}
+};
+fs.writeFileSync('$CLAUDE_JSON', JSON.stringify(config, null, 2));
+console.log('OK');
+" && MCP_REGISTERED=true
+        fi
+    else
+        # No claude.json exists — create minimal one
+        cat > "$CLAUDE_JSON" << MCPEOF
+{
+  "mcpServers": {
+    "projectguide-agent": {
+      "type": "stdio",
+      "command": "$BIN_DIR/$BINARY_NAME",
+      "args": [],
+      "env": {}
+    }
+  }
+}
+MCPEOF
+        MCP_REGISTERED=true
+    fi
+
+    if [ "$MCP_REGISTERED" = true ]; then
+        success "MCP config written directly to $CLAUDE_JSON"
+    else
+        fail "Could not register MCP server automatically."
+        echo ""
+        echo "  Please register manually by running:"
+        echo "    claude mcp add projectguide-agent -s user -- $BIN_DIR/$BINARY_NAME"
+        echo ""
+    fi
 fi
 
 # ----------------------------------------------------------
