@@ -210,8 +210,9 @@ if defined CLAUDE_MD_SOURCE (
 :: ----------------------------------------------------------
 :: Step 6: Copy agent prompt
 :: ----------------------------------------------------------
-if exist "%SCRIPT_DIR%Skills\agent_prompt.md" (
-    copy "%SCRIPT_DIR%Skills\agent_prompt.md" "%INSTALL_DIR%\agent_prompt.md" /Y >nul
+if exist "%SCRIPT_DIR%Skills\prompts\" (
+    mkdir "%INSTALL_DIR%\prompts" 2>nul
+    copy "%SCRIPT_DIR%Skills\prompts\*.md" "%INSTALL_DIR%\prompts\" /Y >nul
 )
 
 :: ----------------------------------------------------------

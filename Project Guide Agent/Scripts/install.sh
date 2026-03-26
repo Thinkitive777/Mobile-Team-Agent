@@ -363,10 +363,12 @@ else
 fi
 
 # ----------------------------------------------------------
-# Step 7: Copy agent prompt
+# Step 7: Copy modular prompt chunks
 # ----------------------------------------------------------
-if [ -f "$SCRIPT_DIR/Skills/agent_prompt.md" ]; then
-    cp "$SCRIPT_DIR/Skills/agent_prompt.md" "$INSTALL_DIR/agent_prompt.md"
+if [ -d "$SCRIPT_DIR/Skills/prompts" ]; then
+    mkdir -p "$INSTALL_DIR/prompts"
+    # Install all skill prompt chunks (core + specialized).
+    cp "$SCRIPT_DIR/Skills/prompts/"*.md "$INSTALL_DIR/prompts/" 2>/dev/null || true
 fi
 
 # ----------------------------------------------------------

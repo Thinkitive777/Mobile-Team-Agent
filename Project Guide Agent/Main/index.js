@@ -126,350 +126,28 @@ const server = new Server(
   { capabilities: { tools: {} } }
 );
 
+// ── Skills Setup ────────────────────────────────────────────────────────
+
+const SkillRegistry = require("./SkillRegistry");
+const SetupSkill = require("../Skills/SetupSkill");
+const JiraReadSkill = require("../Skills/JiraReadSkill");
+const JiraWriteSkill = require("../Skills/JiraWriteSkill");
+const WorkflowSkill = require("../Skills/WorkflowSkill");
+const GitSkill = require("../Skills/GitSkill");
+const LegacySkill = require("../Skills/LegacySkill");
+
+const registry = new SkillRegistry();
+registry.register(new SetupSkill());
+registry.register(new JiraReadSkill());
+registry.register(new JiraWriteSkill());
+registry.register(new WorkflowSkill());
+registry.register(new GitSkill());
+registry.register(new LegacySkill());
+
 // ── Tool definitions ────────────────────────────────────────────────────
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    // ── Setup ──
-    {
-      name: "get_setup_status",
-      description: "Check connection status for all integrations and suggest setup steps.",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "configure_service",
-      description: "Configure Jira or GitHub. Jira requires url, email, token. GitHub requires token.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          service: { type: "string", enum: ["jira", "github"] },
-          url: { type: "string", description: "Jira instance URL (Jira only)" },
-          email: { type: "string", description: "Jira email (Jira only)" },
-          token: { type: "string", description: "API token" },
-          user: { type: "string", description: "GitHub username" },
-          repo: { type: "string", description: "GitHub repo (owner/repo)" },
-        },
-        required: ["service", "token"],
-      },
-    },
-
-    // ── Jira ──
-    {
-      name: "jira_connection_test",
-      description: "Validate Jira credentials and return current user info.",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "fetch_jira_tickets",
-      description: "Search Jira tickets with JQL filters: assignee, status, sprint, updated date range.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          assignee: { type: "string", description: "Filter by assignee (or 'currentUser')" },
-          status: { type: "string", description: "Comma-separated statuses (e.g. 'To Do,In Progress')" },
-          sprint: { type: "string", description: "Sprint name" },
-          updated_since: { type: "string", description: "Updated since (e.g. '-7d')" },
-          jql: { type: "string", description: "Raw JQL query (overrides other filters)" },
-          start_at: { type: "number", description: "Pagination offset (default: 0)" },
-        },
-      },
-    },
-    {
-      name: "get_ticket_details",
-      description: "Full Jira ticket details: description, comments, subtasks, linked issues, status history.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          ticket_key: { type: "string", description: "Jira ticket key (e.g. PROJ-123)" },
-        },
-        required: ["ticket_key"],
-      },
-    },
-    {
-      name: "analyze_workload",
-      description: "Categorize all assigned tickets: Done, In Progress, Not Started, Blocked, Overdue. Includes smart blocker detection via issue links.",
-      inputSchema: { type: "object", properties: {} },
-    },
-
-    // ── Git ──
-    {
-      name: "get_recent_commits",
-      description: "Fetch recent git commits with automatic Jira ticket linking.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          since: { type: "string", description: "Time period (default: '48 hours ago')" },
-        },
-      },
-    },
-
-    // ── Automation ──
-    {
-      name: "morning_standup",
-      description: "Generate morning standup: pending tickets, recent commits, prioritized daily plan. Works even if Jira is unavailable (falls back to Git data).",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "end_of_day_report",
-      description: "Generate, save, and display end-of-day report. Includes carry-forward from yesterday.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          date: { type: "string", description: "Report date (default: today, YYYY-MM-DD)" },
-        },
-      },
-    },
-
-    // ── Reports ──
-    {
-      name: "get_daily_report",
-      description: "Retrieve a previously saved daily report by date.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          date: { type: "string", description: "YYYY-MM-DD" },
-        },
-        required: ["date"],
-      },
-    },
-    {
-      name: "list_daily_reports",
-      description: "List all saved daily reports with optional date range.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          start_date: { type: "string", description: "Start (YYYY-MM-DD)" },
-          end_date: { type: "string", description: "End (YYYY-MM-DD)" },
-        },
-      },
-    },
-    {
-      name: "weekly_summary",
-      description: "Generate a weekly summary aggregating daily reports (last 7 days or ending at a specified date).",
-      inputSchema: {
-        type: "object",
-        properties: {
-          end_date: { type: "string", description: "Week ending date (default: today)" },
-        },
-      },
-    },
-
-    // ── Operations ──
-    {
-      name: "sync_offline_actions",
-      description: "Retry queued Jira write actions that failed while offline.",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "health_check",
-      description: "Check health of all integrations: Jira connectivity, Git availability, report storage.",
-      inputSchema: { type: "object", properties: {} },
-    },
-
-    // ── Smart Workflow ──
-    {
-      name: "list_projects",
-      description: "List all Jira projects accessible to the user. Remembers last selected project.",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "list_sprints",
-      description: "List active/future sprints for a project. Auto-detects board from project key. Remembers last selected sprint.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          project_key: { type: "string", description: "Jira project key (e.g. PROJ). Uses last project if omitted." },
-        },
-      },
-    },
-    {
-      name: "smart_ticket_query",
-      description: "Interactive ticket search with categorized output (Bugs/Stories/Tasks/Subtasks). IMPORTANT: Requires project, sprint, and assignee. If any are missing and no saved preferences exist, the tool will return a prompt asking for the missing details. Ask the user BEFORE calling this tool if they haven't specified these filters.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          project: { type: "string", description: "Project key (REQUIRED — falls back to saved preference if omitted)" },
-          sprint: { type: "string", description: "Sprint name (REQUIRED — falls back to saved preference if omitted)" },
-          assignee: { type: "string", description: "Assignee (REQUIRED — falls back to saved preference if omitted, use 'currentUser' for the authenticated user)" },
-          status: { type: "string", description: "Comma-separated statuses" },
-          priority: { type: "string", description: "Filter by priority (e.g. 'High,Highest')" },
-        },
-      },
-    },
-    {
-      name: "get_ticket_suggestions",
-      description: "Analyze assigned tickets and provide intelligent suggestions on what to work on next. Considers priority, deadlines, dependencies, blockers, and current progress.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          project: { type: "string", description: "Project key (uses last project if omitted)" },
-        },
-      },
-    },
-    {
-      name: "select_ticket",
-      description: "Select a ticket to work on. Returns full details with description, comments, and a generated implementation plan. Ask for confirmation before proceeding.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          ticket_key: { type: "string", description: "Jira ticket key (e.g. PROJ-123)" },
-        },
-        required: ["ticket_key"],
-      },
-    },
-    {
-      name: "set_preferences",
-      description: "Save user preferences (project, sprint, assignee, greeting name) for persistent memory across sessions.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          project: { type: "string", description: "Default project key" },
-          sprint: { type: "string", description: "Default sprint name" },
-          board_id: { type: "number", description: "Default board ID" },
-          assignee: { type: "string", description: "Default assignee" },
-          greeting_name: { type: "string", description: "User's name for greetings" },
-        },
-      },
-    },
-
-    // ── Ticket Actions (Write) ──
-    {
-      name: "list_tickets",
-      description: "List Jira tickets with flexible filters. Simpler alternative to smart_ticket_query — doesn't require project/sprint. Great for quick lookups like 'my tickets this week', 'all bugs', 'overdue tasks'.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          assignee: { type: "string", description: "Filter by assignee ('me' or 'currentUser' for yourself, or a name)" },
-          status: { type: "string", description: "Comma-separated statuses (e.g. 'To Do,In Progress')" },
-          priority: { type: "string", description: "Comma-separated priorities (e.g. 'High,Highest')" },
-          project: { type: "string", description: "Project key (e.g. PROJ)" },
-          sprint: { type: "string", description: "Sprint name" },
-          type: { type: "string", description: "Issue type filter (Bug, Story, Task, Epic)" },
-          updated_since: { type: "string", description: "Updated since (e.g. '-7d', '-1w', 'startOfWeek()')" },
-          due_this_week: { type: "boolean", description: "Only show tickets due this week" },
-          include_done: { type: "boolean", description: "Include completed tickets (default: false)" },
-          jql: { type: "string", description: "Raw JQL (overrides all other filters)" },
-          max_results: { type: "number", description: "Max results to return (default: 50)" },
-          start_at: { type: "number", description: "Pagination offset (default: 0)" },
-        },
-      },
-    },
-    {
-      name: "transition_ticket",
-      description: "Move a Jira ticket to a new status (e.g. 'To Do' → 'In Progress' → 'Done'). Shows available transitions if no target specified.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          ticket_key: { type: "string", description: "Jira ticket key (e.g. PROJ-123)" },
-          status: { type: "string", description: "Target status name (e.g. 'In Progress', 'Done'). Omit to see available transitions." },
-        },
-        required: ["ticket_key"],
-      },
-    },
-    {
-      name: "add_comment",
-      description: "Add a comment to a Jira ticket. Use for progress updates, notes, or questions.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          ticket_key: { type: "string", description: "Jira ticket key (e.g. PROJ-123)" },
-          comment: { type: "string", description: "Comment text to add" },
-        },
-        required: ["ticket_key", "comment"],
-      },
-    },
-    {
-      name: "assign_ticket",
-      description: "Assign a Jira ticket to a user. Use search_users to find the account ID first.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          ticket_key: { type: "string", description: "Jira ticket key (e.g. PROJ-123)" },
-          account_id: { type: "string", description: "Jira account ID of the assignee. Use search_users to find it." },
-          assign_to_me: { type: "boolean", description: "Set true to assign to the currently authenticated user" },
-        },
-        required: ["ticket_key"],
-      },
-    },
-    {
-      name: "create_ticket",
-      description: "Create a new Jira ticket. Returns the new ticket key.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          project: { type: "string", description: "Project key (e.g. PROJ). Uses saved preference if omitted." },
-          summary: { type: "string", description: "Ticket title/summary" },
-          type: { type: "string", description: "Issue type: Bug, Story, Task, Sub-task, Epic (default: Task)" },
-          description: { type: "string", description: "Detailed description" },
-          priority: { type: "string", description: "Priority: Highest, High, Medium, Low, Lowest (default: Medium)" },
-          assignee: { type: "string", description: "Account ID to assign to (omit for unassigned)" },
-          labels: { type: "string", description: "Comma-separated labels" },
-          due_date: { type: "string", description: "Due date (YYYY-MM-DD)" },
-          parent: { type: "string", description: "Parent ticket key (for Sub-tasks)" },
-          custom_fields: { type: "string", description: "JSON string of custom fields. Use get_create_meta first to discover required custom fields." },
-        },
-        required: ["summary"],
-      },
-    },
-    {
-      name: "get_create_meta",
-      description: "Get required fields for creating a ticket (useful for custom fields).",
-      inputSchema: {
-        type: "object",
-        properties: {
-          project: { type: "string", description: "Project key" },
-          type: { type: "string", description: "Issue type (e.g. Sub-task, Bug)" },
-        },
-        required: ["project", "type"]
-      },
-    },
-    {
-      name: "search_users",
-      description: "Search for Jira users by name or email. Useful for finding account IDs for assignment.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "Search query (name or email)" },
-        },
-        required: ["query"],
-      },
-    },
-    {
-      name: "log_work",
-      description: "Log time spent on a Jira ticket. Use Jira time format (e.g. '2h', '1d', '30m').",
-      inputSchema: {
-        type: "object",
-        properties: {
-          ticket_key: { type: "string", description: "Jira ticket key (e.g. PROJ-123)" },
-          time_spent: { type: "string", description: "Time spent in Jira format (e.g. '2h', '1d 4h', '30m')" },
-          comment: { type: "string", description: "Optional work description" },
-        },
-        required: ["ticket_key", "time_spent"],
-      },
-    },
-
-    // ── Legacy ──
-    {
-      name: "run_skill",
-      description: "Execute a skill: developer-mode, file-info, or route to other tools (list-projects, list-sprints, list-tickets, etc.).",
-      inputSchema: {
-        type: "object",
-        properties: {
-          skill: { type: "string" },
-          args: { type: "string" },
-        },
-        required: ["skill"],
-      },
-    },
-    {
-      name: "invoke_projectguide",
-      description: "Activate the Project Guide Agent. Shows setup status and next steps.",
-      inputSchema: {
-        type: "object",
-        properties: { reason: { type: "string" } },
-      },
-    },
-  ],
+  tools: registry.getAllTools()
 }));
 
 // ── Tool handlers ───────────────────────────────────────────────────────
@@ -478,7 +156,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args = {} } = request.params;
   Logger.info("Tool called", { tool: name });
 
+  const context = {
+    config,
+    preferences,
+    saveConfig,
+    savePreferences,
+    getJiraClient,
+    getRepoPath,
+    maskToken,
+  };
+
   try {
+    const result = await registry.handleTool(name, args, context);
+    if (result) return result;
+    return errorResponse(`Tool execution returned null for ${name}`);
+  } catch (error) {
+    Logger.error("Tool execution failed", { tool: name, error: error.message, code: error.code });
+    const prefix = error.code ? `[${error.code}] ` : '';
+    return errorResponse(`${prefix}${error.message}`);
+  }
+});
+
+
+
+/*  try {
     switch (name) {
 
       // ── invoke_projectguide ───────────────────────────────────────────
@@ -2012,6 +1713,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     return errorResponse(`${prefix}${error.message}`);
   }
 });
+*/
 
 // ── Start ───────────────────────────────────────────────────────────────
 

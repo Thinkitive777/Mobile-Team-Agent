@@ -77,7 +77,7 @@ The Project Guide Agent's tools are automatically loaded. You can activate the s
 - `dist/`: Contains the optimized binaries for all platforms.
 - `install.sh` / `install.bat`: One-command installation scripts.
 - `index.js`: The core MCP server logic.
-- `agent_prompt.md`: The brain of the agent (system prompt).
+- `Skills/prompts/*.md`: Modular system prompt chunks for each skill.
 
 ---
 
