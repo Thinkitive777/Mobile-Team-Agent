@@ -77,6 +77,7 @@ class WorkflowSkill extends BaseSkill {
       case "morning_standup": {
         let tickets = [];
         let jiraError = null;
+        let gitError = null;
         let totalTickets = 0;
 
         try {
@@ -94,7 +95,7 @@ class WorkflowSkill extends BaseSkill {
         try {
           commits = await GitUtils.getRecentCommits(CONST.STANDUP_COMMIT_WINDOW, getRepoPath());
         } catch (err) {
-          // Ignore
+          gitError = err.message;
         }
 
         const carryForward = ReportManager.getYesterdayCarryForward();
@@ -102,6 +103,7 @@ class WorkflowSkill extends BaseSkill {
         let out = `Morning Standup — ${now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}\n\n`;
 
         if (jiraError) out += `[Jira unavailable: ${jiraError}]\n\n`;
+        if (gitError) out += `[Git unavailable: ${gitError}]\n\n`;
 
         if (tickets.length > 0) {
           const highPriority = tickets.filter(t => t.priority === "Highest" || t.priority === "High");
@@ -190,7 +192,8 @@ class WorkflowSkill extends BaseSkill {
         const reportDate = args.date || ReportManager.formatDate();
 
         let commits = [];
-        try { commits = await GitUtils.getTodayCommits(getRepoPath()); } catch (err) {}
+        let gitError = null;
+        try { commits = await GitUtils.getTodayCommits(getRepoPath()); } catch (err) { gitError = err.message; }
 
         let completed = [];
         let inProgress = [];
@@ -214,6 +217,7 @@ class WorkflowSkill extends BaseSkill {
         if (commits.length > 0) notes += `${commits.length} commit(s) made today. `;
         if (completed.length > 0) notes += `${completed.length} ticket(s) completed. `;
         if (jiraError) notes += `[Jira was unavailable: ${jiraError}]`;
+        if (!jiraError && gitError) notes += `[Git was unavailable: ${gitError}]`;
         if (!notes) notes = 'Quiet day.';
 
         const report = ReportManager.generateDailyReport(reportDate, {
@@ -228,6 +232,7 @@ class WorkflowSkill extends BaseSkill {
         out += `- ${commits.length} commit(s)\n- ${completed.length} ticket(s) completed\n`;
         out += `- ${inProgress.length} ticket(s) in progress\n- ${carryForward.length} item(s) carry forward\n`;
         if (jiraError) out += `\n[Jira was unavailable — report based on Git data only]\n`;
+        if (gitError) out += `\n[Git was unavailable — commit section may be incomplete]\n`;
 
         return this.textResponse(out);
       }
