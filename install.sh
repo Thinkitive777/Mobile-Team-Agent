@@ -11,5 +11,23 @@ if [ ! -d "$AGENT_DIR" ]; then
     exit 1
 fi
 
-chmod +x "$AGENT_DIR/install.sh"
-exec "$AGENT_DIR/install.sh"
+INSTALLER=""
+
+# Backwards compatible: older archives may have the installer at the root,
+# but this repo keeps it under `Project Guide Agent/Scripts/`.
+if [ -f "$AGENT_DIR/install.sh" ]; then
+    INSTALLER="$AGENT_DIR/install.sh"
+elif [ -f "$AGENT_DIR/Scripts/install.sh" ]; then
+    INSTALLER="$AGENT_DIR/Scripts/install.sh"
+fi
+
+if [ -z "$INSTALLER" ]; then
+    echo "Error: Installer not found."
+    echo "Expected either:"
+    echo "  - $AGENT_DIR/install.sh"
+    echo "  - $AGENT_DIR/Scripts/install.sh"
+    exit 1
+fi
+
+chmod +x "$INSTALLER"
+exec "$INSTALLER"

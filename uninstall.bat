@@ -2,7 +2,9 @@
 set "SCRIPT_DIR=%~dp0"
 set "AGENT_DIR=%SCRIPT_DIR%Project Guide Agent"
 
-if exist "%AGENT_DIR%\uninstall.bat" (
+if exist "%AGENT_DIR%\Scripts\uninstall.bat" (
+    call "%AGENT_DIR%\Scripts\uninstall.bat"
+) else if exist "%AGENT_DIR%\uninstall.bat" (
     call "%AGENT_DIR%\uninstall.bat"
 ) else (
     echo Performing manual cleanup...
