@@ -10,14 +10,14 @@ const os = require("os");
 require("dotenv").config();
 
 // Internal modules
-const CONST = require("./constants");
-const Logger = require("./logger");
-const { AppError, ConfigError, ValidationError, JiraNetworkError } = require("./errors");
-const { validate, ticketKeySchema, dateSchema, serviceSchema, jiraUrlSchema, emailSchema } = require("./validators");
-const JiraClient = require("./jira-client");
-const OfflineQueue = require("./offline-queue");
-const GitUtils = require("./git-utils");
-const ReportManager = require("./report-manager");
+const CONST = require("../Constants/constants");
+const Logger = require("../Utils/logger");
+const { AppError, ConfigError, ValidationError, JiraNetworkError } = require("../Utils/errors");
+const { validate, ticketKeySchema, dateSchema, serviceSchema, jiraUrlSchema, emailSchema } = require("../Utils/validators");
+const JiraClient = require("../Services/jira-client");
+const OfflineQueue = require("../Services/offline-queue");
+const GitUtils = require("../Utils/git-utils");
+const ReportManager = require("../Services/report-manager");
 
 // ── Config ──────────────────────────────────────────────────────────────
 

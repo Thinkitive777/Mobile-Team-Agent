@@ -17,7 +17,7 @@ set "INSTALL_DIR=%USERPROFILE%\.projectguide-agent"
 set "BIN_DIR=%INSTALL_DIR%\bin"
 set "BINARY_NAME=projectguide-agent.exe"
 set "CLAUDE_GLOBAL_DIR=%USERPROFILE%\.claude"
-set "SCRIPT_DIR=%~dp0"
+set "SCRIPT_DIR=%~dp0..\"
 set "VERSION=2.1.0"
 
 echo.
@@ -64,15 +64,19 @@ if exist "%SOURCE_BINARY%" (
 
 :: Fallback to Node.js source if no binary
 if "%INSTALL_MODE%"=="" (
-    if exist "%SCRIPT_DIR%index.js" (
+    if exist "%SCRIPT_DIR%Main\index.js" (
         where node >nul 2>&1
         if !ERRORLEVEL! equ 0 (
             echo [INFO]  Installing from source (Node.js mode^)...
 
             :: Copy source files
-            for %%f in (index.js jira-client.js git-utils.js report-manager.js constants.js errors.js logger.js validators.js package.json agent_prompt.md .env.example) do (
-                if exist "%SCRIPT_DIR%%%f" copy "%SCRIPT_DIR%%%f" "%INSTALL_DIR%\src\%%f" /Y >nul
-            )
+            xcopy "%SCRIPT_DIR%Constants" "%INSTALL_DIR%\src\Constants" /E /I /Y >nul
+            xcopy "%SCRIPT_DIR%Main" "%INSTALL_DIR%\src\Main" /E /I /Y >nul
+            xcopy "%SCRIPT_DIR%Scripts" "%INSTALL_DIR%\src\Scripts" /E /I /Y >nul
+            xcopy "%SCRIPT_DIR%Skills" "%INSTALL_DIR%\src\Skills" /E /I /Y >nul
+            xcopy "%SCRIPT_DIR%Utils" "%INSTALL_DIR%\src\Utils" /E /I /Y >nul
+            xcopy "%SCRIPT_DIR%Services" "%INSTALL_DIR%\src\Services" /E /I /Y >nul
+            if exist "%SCRIPT_DIR%package.json" copy "%SCRIPT_DIR%package.json" "%INSTALL_DIR%\src\package.json" /Y >nul
 
             :: Install dependencies
             echo [INFO]  Installing Node.js dependencies...
@@ -83,13 +87,13 @@ if "%INSTALL_MODE%"=="" (
             :: Create runner batch script
             (
                 echo @echo off
-                echo node "%INSTALL_DIR%\src\index.js" %%*
+                echo node "%INSTALL_DIR%\src\Main\index.js" %%*
             ) > "%BIN_DIR%\%BINARY_NAME%"
 
             :: Also create a .cmd version
             (
                 echo @echo off
-                echo node "%INSTALL_DIR%\src\index.js" %%*
+                echo node "%INSTALL_DIR%\src\Main\index.js" %%*
             ) > "%BIN_DIR%\projectguide-agent.cmd"
 
             set "INSTALL_MODE=source"
@@ -108,8 +112,8 @@ if "%INSTALL_MODE%"=="" (
 )
 
 :: Copy invoke wrapper
-if exist "%SCRIPT_DIR%invoke.bat" (
-    copy "%SCRIPT_DIR%invoke.bat" "%BIN_DIR%\invoke.bat" /Y >nul
+if exist "%SCRIPT_DIR%Scripts\invoke.bat" (
+    copy "%SCRIPT_DIR%Scripts\invoke.bat" "%BIN_DIR%\invoke.bat" /Y >nul
 )
 
 :: ----------------------------------------------------------
@@ -126,7 +130,7 @@ claude mcp remove projectguide-agent >nul 2>&1
 if "%INSTALL_MODE%"=="binary" (
     claude mcp add projectguide-agent -s user -- "%BIN_DIR%\%BINARY_NAME%"
 ) else (
-    claude mcp add projectguide-agent -s user -- node "%INSTALL_DIR%\src\index.js"
+    claude mcp add projectguide-agent -s user -- node "%INSTALL_DIR%\src\Main\index.js"
 )
 
 :: Verify registration in ~/.claude.json
@@ -153,7 +157,7 @@ if "!MCP_REGISTERED!"=="0" (
         "if ('%INSTALL_MODE%' -eq 'binary') { " ^
         "  $server = [PSCustomObject]@{ type='stdio'; command='%BIN_DIR:\=\\%\\%BINARY_NAME%'; args=@(); env=[PSCustomObject]@{} } " ^
         "} else { " ^
-        "  $server = [PSCustomObject]@{ type='stdio'; command='node'; args=@('%INSTALL_DIR:\=\\%\\src\\index.js'); env=[PSCustomObject]@{} } " ^
+        "  $server = [PSCustomObject]@{ type='stdio'; command='node'; args=@('%INSTALL_DIR:\=\\%\\src\\Main\\index.js'); env=[PSCustomObject]@{} } " ^
         "}; " ^
         "$config.mcpServers | Add-Member -NotePropertyName 'projectguide-agent' -NotePropertyValue $server -Force; " ^
         "$config | ConvertTo-Json -Depth 10 | Set-Content $jsonPath"
@@ -206,8 +210,8 @@ if defined CLAUDE_MD_SOURCE (
 :: ----------------------------------------------------------
 :: Step 6: Copy agent prompt
 :: ----------------------------------------------------------
-if exist "%SCRIPT_DIR%agent_prompt.md" (
-    copy "%SCRIPT_DIR%agent_prompt.md" "%INSTALL_DIR%\agent_prompt.md" /Y >nul
+if exist "%SCRIPT_DIR%Skills\agent_prompt.md" (
+    copy "%SCRIPT_DIR%Skills\agent_prompt.md" "%INSTALL_DIR%\agent_prompt.md" /Y >nul
 )
 
 :: ----------------------------------------------------------

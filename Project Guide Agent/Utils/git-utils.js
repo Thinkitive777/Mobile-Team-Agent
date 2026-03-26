@@ -4,7 +4,7 @@ const { promisify } = require('util');
 const {
   GIT_DEFAULT_SINCE, GIT_MAX_BUFFER,
   GIT_SHORT_HASH_LENGTH, GIT_LOG_FORMAT, TICKET_ID_PATTERN,
-} = require('./constants');
+} = require('../Constants/constants');
 const { GitError } = require('./errors');
 const Logger = require('./logger');
 

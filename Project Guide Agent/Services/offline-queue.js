@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
-const CONST = require('./constants');
-const Logger = require('./logger');
+const CONST = require('../Constants/constants');
+const Logger = require('../Utils/logger');
 
 const QUEUE_FILE = path.join(CONST.CONFIG_DIR, 'offline_queue.json');
 

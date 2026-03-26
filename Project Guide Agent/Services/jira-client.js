@@ -2,9 +2,9 @@ const {
   JIRA_MAX_RESULTS, JIRA_REQUEST_TIMEOUT_MS,
   JIRA_MAX_RETRIES, JIRA_RETRY_BASE_DELAY_MS,
   JIRA_DEFAULT_FIELDS, COMMENT_PREVIEW_LENGTH,
-} = require('./constants');
-const { JiraConnectionError, JiraAuthError, JiraRateLimitError, JiraNetworkError } = require('./errors');
-const Logger = require('./logger');
+} = require('../Constants/constants');
+const { JiraConnectionError, JiraAuthError, JiraRateLimitError, JiraNetworkError } = require('../Utils/errors');
+const Logger = require('../Utils/logger');
 
 class JiraClient {
   constructor(baseUrl, email, token) {

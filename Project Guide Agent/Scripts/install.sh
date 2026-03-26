@@ -20,7 +20,7 @@ BIN_DIR="$INSTALL_DIR/bin"
 BINARY_NAME="projectguide-agent"
 CLAUDE_GLOBAL_DIR="$HOME/.claude"
 CLAUDE_JSON="$HOME/.claude.json"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="2.1.0"
 
 # Colors
@@ -157,18 +157,22 @@ fi
 
 # Fallback to Node.js source if binary not available or failed
 if [ -z "$INSTALL_MODE" ]; then
-    if [ -f "$SCRIPT_DIR/index.js" ]; then
+    if [ -f "$SCRIPT_DIR/Main/index.js" ]; then
         if command -v node &> /dev/null; then
             NODE_VERSION=$(node -v | sed 's/v//' | cut -d. -f1)
             if [ "$NODE_VERSION" -ge 18 ] 2>/dev/null; then
                 info "Installing from source (Node.js mode)..."
 
                 # Copy source files
-                for f in index.js jira-client.js git-utils.js report-manager.js constants.js errors.js logger.js validators.js package.json agent_prompt.md; do
-                    if [ -f "$SCRIPT_DIR/$f" ]; then
-                        cp "$SCRIPT_DIR/$f" "$INSTALL_DIR/src/"
-                    fi
-                done
+                cp -R "$SCRIPT_DIR/Constants" "$INSTALL_DIR/src/"
+                cp -R "$SCRIPT_DIR/Main" "$INSTALL_DIR/src/"
+                cp -R "$SCRIPT_DIR/Scripts" "$INSTALL_DIR/src/"
+                cp -R "$SCRIPT_DIR/Skills" "$INSTALL_DIR/src/"
+                cp -R "$SCRIPT_DIR/Utils" "$INSTALL_DIR/src/"
+                cp -R "$SCRIPT_DIR/Services" "$INSTALL_DIR/src/"
+                if [ -f "$SCRIPT_DIR/package.json" ]; then
+                    cp "$SCRIPT_DIR/package.json" "$INSTALL_DIR/src/"
+                fi
 
                 # Copy .env.example
                 if [ -f "$SCRIPT_DIR/.env.example" ]; then
@@ -185,7 +189,7 @@ if [ -z "$INSTALL_MODE" ]; then
                 cat > "$BIN_DIR/$BINARY_NAME" << 'RUNNER'
 #!/bin/bash
 AGENT_DIR="$HOME/.projectguide-agent/src"
-exec node "$AGENT_DIR/index.js" "$@"
+exec node "$AGENT_DIR/Main/index.js" "$@"
 RUNNER
                 chmod +x "$BIN_DIR/$BINARY_NAME"
                 INSTALL_MODE="source"
@@ -210,8 +214,8 @@ RUNNER
 fi
 
 # Copy invoke wrapper
-if [ -f "$SCRIPT_DIR/invoke" ]; then
-    cp "$SCRIPT_DIR/invoke" "$BIN_DIR/invoke"
+if [ -f "$SCRIPT_DIR/Scripts/invoke" ]; then
+    cp "$SCRIPT_DIR/Scripts/invoke" "$BIN_DIR/invoke"
     chmod +x "$BIN_DIR/invoke"
 fi
 
@@ -361,8 +365,8 @@ fi
 # ----------------------------------------------------------
 # Step 7: Copy agent prompt
 # ----------------------------------------------------------
-if [ -f "$SCRIPT_DIR/agent_prompt.md" ]; then
-    cp "$SCRIPT_DIR/agent_prompt.md" "$INSTALL_DIR/agent_prompt.md"
+if [ -f "$SCRIPT_DIR/Skills/agent_prompt.md" ]; then
+    cp "$SCRIPT_DIR/Skills/agent_prompt.md" "$INSTALL_DIR/agent_prompt.md"
 fi
 
 # ----------------------------------------------------------

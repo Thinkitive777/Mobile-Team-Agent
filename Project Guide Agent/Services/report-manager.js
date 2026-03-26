@@ -1,9 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 
-const { REPORTS_DIR, REPORT_FILE_PERMISSIONS } = require('./constants');
-const { AppError } = require('./errors');
-const Logger = require('./logger');
+const { REPORTS_DIR, REPORT_FILE_PERMISSIONS } = require('../Constants/constants');
+const { AppError } = require('../Utils/errors');
+const Logger = require('../Utils/logger');
 
 class ReportManager {
   static REPORTS_DIR = REPORTS_DIR;
