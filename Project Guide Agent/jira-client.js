@@ -3,7 +3,7 @@ const {
   JIRA_MAX_RETRIES, JIRA_RETRY_BASE_DELAY_MS,
   JIRA_DEFAULT_FIELDS, COMMENT_PREVIEW_LENGTH,
 } = require('./constants');
-const { JiraConnectionError, JiraAuthError, JiraRateLimitError } = require('./errors');
+const { JiraConnectionError, JiraAuthError, JiraRateLimitError, JiraNetworkError } = require('./errors');
 const Logger = require('./logger');
 
 class JiraClient {
@@ -70,17 +70,17 @@ class JiraClient {
             await this._sleep(JIRA_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1));
             continue;
           }
-          throw new JiraConnectionError('Jira request timed out after retries');
+          throw new JiraNetworkError('Jira request timed out after retries');
         }
         // Non-retryable errors
-        if (err instanceof JiraAuthError || err instanceof JiraRateLimitError) throw err;
+        if (err instanceof JiraAuthError || err instanceof JiraRateLimitError || err instanceof JiraConnectionError) throw err;
         // Network / transient — retry
         if (attempt < retries) {
           Logger.warn('Jira request failed, retrying', { attempt, error: err.message });
           await this._sleep(JIRA_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1));
           continue;
         }
-        throw err;
+        throw new JiraNetworkError(`Jira network error: ${err.message}`);
       }
     }
   }
@@ -408,6 +408,7 @@ class JiraClient {
     if (extras.labels) fields.labels = extras.labels;
     if (extras.duedate) fields.duedate = extras.duedate;
     if (extras.parent) fields.parent = { key: extras.parent };
+    if (extras.customFields) Object.assign(fields, extras.customFields);
 
     const response = await this._fetchWithRetry(
       `${this.baseUrl}/rest/api/3/issue`,
@@ -420,6 +421,15 @@ class JiraClient {
       id: data.id,
       self: data.self,
     };
+  }
+
+  async getCreateMeta(projectKey, issueType = null) {
+    Logger.debug('Fetching create meta', { projectKey, issueType });
+    let url = `${this.baseUrl}/rest/api/3/issue/createmeta?projectKeys=${encodeURIComponent(projectKey)}&expand=projects.issuetypes.fields`;
+    if (issueType) url += `&issuetypeNames=${encodeURIComponent(issueType)}`;
+    const response = await this._fetchWithRetry(url);
+    const data = await response.json();
+    return data;
   }
 
   async searchUsers(query, maxResults = 10) {

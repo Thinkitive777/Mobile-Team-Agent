@@ -12,9 +12,10 @@ require("dotenv").config();
 // Internal modules
 const CONST = require("./constants");
 const Logger = require("./logger");
-const { AppError, ConfigError, ValidationError } = require("./errors");
+const { AppError, ConfigError, ValidationError, JiraNetworkError } = require("./errors");
 const { validate, ticketKeySchema, dateSchema, serviceSchema, jiraUrlSchema, emailSchema } = require("./validators");
 const JiraClient = require("./jira-client");
+const OfflineQueue = require("./offline-queue");
 const GitUtils = require("./git-utils");
 const ReportManager = require("./report-manager");
 
@@ -169,6 +170,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           sprint: { type: "string", description: "Sprint name" },
           updated_since: { type: "string", description: "Updated since (e.g. '-7d')" },
           jql: { type: "string", description: "Raw JQL query (overrides other filters)" },
+          start_at: { type: "number", description: "Pagination offset (default: 0)" },
         },
       },
     },
@@ -253,6 +255,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
 
     // ── Operations ──
+    {
+      name: "sync_offline_actions",
+      description: "Retry queued Jira write actions that failed while offline.",
+      inputSchema: { type: "object", properties: {} },
+    },
     {
       name: "health_check",
       description: "Check health of all integrations: Jira connectivity, Git availability, report storage.",
@@ -343,6 +350,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           include_done: { type: "boolean", description: "Include completed tickets (default: false)" },
           jql: { type: "string", description: "Raw JQL (overrides all other filters)" },
           max_results: { type: "number", description: "Max results to return (default: 50)" },
+          start_at: { type: "number", description: "Pagination offset (default: 0)" },
         },
       },
     },
@@ -398,8 +406,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           labels: { type: "string", description: "Comma-separated labels" },
           due_date: { type: "string", description: "Due date (YYYY-MM-DD)" },
           parent: { type: "string", description: "Parent ticket key (for Sub-tasks)" },
+          custom_fields: { type: "string", description: "JSON string of custom fields. Use get_create_meta first to discover required custom fields." },
         },
         required: ["summary"],
+      },
+    },
+    {
+      name: "get_create_meta",
+      description: "Get required fields for creating a ticket (useful for custom fields).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project: { type: "string", description: "Project key" },
+          type: { type: "string", description: "Issue type (e.g. Sub-task, Bug)" },
+        },
+        required: ["project", "type"]
       },
     },
     {
@@ -617,9 +638,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             : "assignee = currentUser() ORDER BY updated DESC";
         }
 
+        const startAt = typeof args.start_at === 'number' ? args.start_at : 0;
         const result = await client.searchTickets(jqlString, [
           ...CONST.JIRA_DEFAULT_FIELDS, 'issuetype'
-        ]);
+        ], CONST.JIRA_MAX_RESULTS, startAt);
         const tickets = result.tickets;
 
         let out = `Found ${tickets.length} ticket(s)`;
@@ -1056,6 +1078,60 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return textResponse(summary);
       }
 
+      // ── sync_offline_actions ──────────────────────────────────────────
+      case "sync_offline_actions": {
+        const queue = OfflineQueue.getQueue();
+        if (queue.length === 0) return textResponse("No offline actions in queue.");
+
+        const client = getJiraClient();
+        const results = [];
+        const remainingQueue = [];
+        let anyOfflineFailures = false;
+
+        for (const action of queue) {
+          try {
+            switch (action.type) {
+              case "transition_ticket":
+                await client.transitionTicket(action.args.ticket_key, action.args.status);
+                results.push(`✅ [${action.type}] ${action.args.ticket_key} transitioned to ${action.args.status}`);
+                break;
+              case "add_comment":
+                await client.addComment(action.args.ticket_key, action.args.comment);
+                results.push(`✅ [${action.type}] Added comment to ${action.args.ticket_key}`);
+                break;
+              case "assign_ticket":
+                await client.assignTicket(action.args.ticket_key, action.args.account_id);
+                results.push(`✅ [${action.type}] Assigned ${action.args.ticket_key} to ${action.args.account_id}`);
+                break;
+              case "create_ticket":
+                await client.createTicket(action.args.project, action.args.summary, action.args.type, action.args.description, action.args.priority, action.args.extras);
+                results.push(`✅ [${action.type}] Created ticket: ${action.args.summary}`);
+                break;
+              case "log_work":
+                await client.logWork(action.args.ticket_key, action.args.time_spent, action.args.comment);
+                results.push(`✅ [${action.type}] Logged ${action.args.time_spent} on ${action.args.ticket_key}`);
+                break;
+              default:
+                results.push(`⚠️ Unknown action type: ${action.type}`);
+            }
+          } catch (err) {
+            if (err instanceof JiraNetworkError) {
+              anyOfflineFailures = true;
+              remainingQueue.push(action);
+              results.push(`❌ [${action.type}] Offline error: ${err.message}. Kept in queue.`);
+            } else {
+              results.push(`❌ [${action.type}] Failed permanently: ${err.message}`);
+            }
+          }
+        }
+
+        OfflineQueue.saveQueue(remainingQueue);
+        
+        let out = `Offline Sync Results:\n\n${results.join('\n')}`;
+        if (anyOfflineFailures) out += `\n\nSome actions remain in the queue because you are still offline.`;
+        return textResponse(out);
+      }
+
       // ── health_check ──────────────────────────────────────────────────
       case "health_check": {
         const results = {
@@ -1147,31 +1223,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorResponse(`No boards found for project ${projectKey}. This project may not use Scrum/Kanban.`);
         }
 
-        const board = boards[0]; // Use first board
-        let sprints;
-        try {
-          sprints = await client.getSprints(board.id);
-        } catch (err) {
-          return errorResponse(`Could not fetch sprints for board "${board.name}": ${err.message}`);
-        }
+        let allSprints = [];
+        let out = `Sprints for ${projectKey}:\n\n`;
 
-        if (sprints.length === 0) {
-          return textResponse(`No active or future sprints found for ${projectKey} (board: ${board.name}).`);
-        }
-
-        let out = `Sprints for ${projectKey} (board: ${board.name})\n\n`;
-        for (const s of sprints) {
-          const isCurrent = preferences.last_sprint === s.name ? ' (current)' : '';
-          const active = s.state === 'active' ? ' [ACTIVE]' : '';
-          out += `  ${s.name}${active}${isCurrent}\n`;
-          if (s.startDate && s.endDate) {
-            out += `    ${s.startDate.substring(0, 10)} to ${s.endDate.substring(0, 10)}\n`;
+        for (const board of boards) {
+          let sprints;
+          try {
+            sprints = await client.getSprints(board.id);
+          } catch (err) {
+             Logger.warn(`Could not fetch sprints for board ${board.name}`, { error: err.message });
+             continue;
           }
-          if (s.goal) out += `    Goal: ${s.goal}\n`;
+
+          if (sprints.length > 0) {
+            out += `--- Board: ${board.name} ---\n`;
+            for (const s of sprints) {
+              const isCurrent = preferences.last_sprint === s.name ? ' (current)' : '';
+              const active = s.state === 'active' ? ' [ACTIVE]' : '';
+              out += `  ${s.name}${active}${isCurrent}\n`;
+              if (s.startDate && s.endDate) {
+                out += `    ${s.startDate.substring(0, 10)} to ${s.endDate.substring(0, 10)}\n`;
+              }
+              if (s.goal) out += `    Goal: ${s.goal}\n`;
+              allSprints.push(s);
+            }
+            out += `\n`;
+          }
+        }
+
+        if (allSprints.length === 0) {
+          return textResponse(`No active or future sprints found for ${projectKey} across ${boards.length} board(s).`);
         }
 
         // Auto-save board ID for future use
-        preferences.last_board_id = board.id;
+        preferences.last_board_id = boards[0].id;
         if (!preferences.last_project || preferences.last_project !== projectKey) {
           preferences.last_project = projectKey;
         }
@@ -1563,9 +1648,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const maxResults = args.max_results || CONST.JIRA_MAX_RESULTS;
+        const startAt = typeof args.start_at === 'number' ? args.start_at : 0;
         const result = await client.searchTickets(jqlString, [
           ...CONST.JIRA_DEFAULT_FIELDS, 'issuetype'
-        ], maxResults);
+        ], maxResults, startAt);
         const tickets = result.tickets;
 
         if (tickets.length === 0) {
@@ -1633,20 +1719,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // If no status given, show available transitions
         if (!args.status) {
-          const transitions = await client.getTransitions(args.ticket_key);
-          if (transitions.length === 0) {
-            return textResponse(`No transitions available for ${args.ticket_key}. The ticket may already be in a final state.`);
+          try {
+            const transitions = await client.getTransitions(args.ticket_key);
+            if (transitions.length === 0) {
+              return textResponse(`No transitions available for ${args.ticket_key}. The ticket may already be in a final state.`);
+            }
+            let out = `Available transitions for ${args.ticket_key}:\n\n`;
+            for (const t of transitions) {
+              out += `  - "${t.name}" → ${t.to}\n`;
+            }
+            out += `\nUse transition_ticket with the status name to move the ticket.\n`;
+            return textResponse(out);
+          } catch (err) {
+            if (err instanceof JiraNetworkError) {
+              return textResponse(`You are offline. Cannot fetch available transitions for ${args.ticket_key}. Specify the target status manually to queue the action.`);
+            }
+            throw err;
           }
-          let out = `Available transitions for ${args.ticket_key}:\n\n`;
-          for (const t of transitions) {
-            out += `  - "${t.name}" → ${t.to}\n`;
-          }
-          out += `\nUse transition_ticket with the status name to move the ticket.\n`;
-          return textResponse(out);
         }
 
-        const result = await client.transitionTicket(args.ticket_key, args.status);
-        return textResponse(`${args.ticket_key} moved to "${result.to}" (transition: ${result.transitionName})`);
+        try {
+          const result = await client.transitionTicket(args.ticket_key, args.status);
+          return textResponse(`${args.ticket_key} moved to "${result.to}" (transition: ${result.transitionName})`);
+        } catch (err) {
+          if (err instanceof JiraNetworkError) {
+            OfflineQueue.addAction({ type: "transition_ticket", args });
+            return textResponse(`You are offline. Transition to "${args.status}" for ${args.ticket_key} has been queued and will be synced later.`);
+          }
+          throw err;
+        }
       }
 
       // ── add_comment ────────────────────────────────────────────────────
@@ -1656,8 +1757,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!args.comment || !args.comment.trim()) return errorResponse("Comment text is required.");
 
         const client = getJiraClient();
-        const result = await client.addComment(args.ticket_key, args.comment);
-        return textResponse(`Comment added to ${args.ticket_key} by ${result.author} at ${result.created}`);
+        try {
+          const result = await client.addComment(args.ticket_key, args.comment);
+          return textResponse(`Comment added to ${args.ticket_key} by ${result.author} at ${result.created}`);
+        } catch (err) {
+          if (err instanceof JiraNetworkError) {
+            OfflineQueue.addAction({ type: "add_comment", args });
+            return textResponse(`You are offline. Your comment on ${args.ticket_key} has been queued and will be synced later.`);
+          }
+          throw err;
+        }
       }
 
       // ── assign_ticket ──────────────────────────────────────────────────
@@ -1671,16 +1780,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // If assign_to_me, get current user's account ID
         if (args.assign_to_me) {
-          const me = await client.testConnection();
-          accountId = me.accountId;
+          try {
+            const me = await client.testConnection();
+            accountId = me.accountId;
+          } catch (err) {
+            if (err instanceof JiraNetworkError) {
+              return textResponse("You are offline. Cannot fetch your account ID for 'assign_to_me'. Please provide account_id manually to queue the action.");
+            }
+            throw err;
+          }
         }
 
         if (!accountId && !args.assign_to_me) {
           return errorResponse("Provide account_id or set assign_to_me=true. Use search_users to find account IDs.");
         }
 
-        const result = await client.assignTicket(args.ticket_key, accountId);
-        return textResponse(`${args.ticket_key} assigned to ${result.assignedTo}`);
+        try {
+          const result = await client.assignTicket(args.ticket_key, accountId);
+          return textResponse(`${args.ticket_key} assigned to ${result.assignedTo}`);
+        } catch (err) {
+          if (err instanceof JiraNetworkError) {
+            OfflineQueue.addAction({ type: "assign_ticket", args: { ticket_key: args.ticket_key, account_id: accountId } });
+            return textResponse(`You are offline. Assignment of ${args.ticket_key} has been queued and will be synced later.`);
+          }
+          throw err;
+        }
       }
 
       // ── create_ticket ──────────────────────────────────────────────────
@@ -1696,21 +1820,67 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (args.labels) extras.labels = args.labels.split(",").map(l => l.trim());
         if (args.due_date) extras.duedate = args.due_date;
         if (args.parent) extras.parent = args.parent;
+        if (args.custom_fields) {
+          try {
+            extras.customFields = JSON.parse(args.custom_fields);
+          } catch (e) {
+            return errorResponse(`Invalid custom_fields JSON: ${e.message}`);
+          }
+        }
 
-        const result = await client.createTicket(
-          project,
-          args.summary,
-          args.type || 'Task',
-          args.description || '',
-          args.priority || 'Medium',
-          extras
-        );
+        try {
+          const result = await client.createTicket(
+            project,
+            args.summary,
+            args.type || 'Task',
+            args.description || '',
+            args.priority || 'Medium',
+            extras
+          );
 
-        let out = `Ticket created: ${result.key}\n`;
-        out += `Project: ${project} | Type: ${args.type || 'Task'} | Priority: ${args.priority || 'Medium'}\n`;
-        out += `Summary: ${args.summary}\n`;
-        if (args.due_date) out += `Due: ${args.due_date}\n`;
-        out += `\nView in Jira: ${config.jira.url || process.env.JIRA_URL}/browse/${result.key}`;
+          let out = `Ticket created: ${result.key}\n`;
+          out += `Project: ${project} | Type: ${args.type || 'Task'} | Priority: ${args.priority || 'Medium'}\n`;
+          out += `Summary: ${args.summary}\n`;
+          if (args.due_date) out += `Due: ${args.due_date}\n`;
+          out += `\nView in Jira: ${config.jira.url || process.env.JIRA_URL}/browse/${result.key}`;
+          return textResponse(out);
+        } catch (err) {
+          if (err instanceof JiraNetworkError) {
+            OfflineQueue.addAction({ type: "create_ticket", args: { project, summary: args.summary, type: args.type || 'Task', description: args.description || '', priority: args.priority || 'Medium', extras } });
+            return textResponse(`You are offline. Creation of ticket "${args.summary}" has been queued and will be synced later.`);
+          }
+          if (err.name === 'JiraConnectionError' && err.details?.status === 400) {
+            const body = err.details?.body || '';
+            return errorResponse(`Failed to create ticket (400 Bad Request). This usually means required fields are missing.\nError from Jira: ${body}\n\nTip: Use the 'get_create_meta' tool to find required custom fields for '${args.type || 'Task'}', then pass them as a JSON string in the 'custom_fields' property.`);
+          }
+          throw err;
+        }
+      }
+
+      // ── get_create_meta ──────────────────────────────────────────────────
+      case "get_create_meta": {
+        const client = getJiraClient();
+        const data = await client.getCreateMeta(args.project, args.type);
+        const proj = data.projects?.[0];
+        if (!proj) return errorResponse(`Project ${args.project} not found or no permissions.`);
+        const typeMeta = proj.issuetypes?.find(it => it.name === args.type);
+        if (!typeMeta) return errorResponse(`Issue type ${args.type} not found in project ${args.project}. Available: ${proj.issuetypes.map(it => it.name).join(', ')}`);
+        
+        const fields = typeMeta.fields;
+        let out = `Fields for ${args.type} in ${args.project}:\n\n`;
+        const required = [];
+        const optional = [];
+        for (const [key, val] of Object.entries(fields)) {
+          const schema = val.schema ? `${val.schema.type}${val.schema.custom ? ' (custom)' : ''}` : 'unknown';
+          const info = `  - ${key} ("${val.name}"): ${schema}`;
+          if (val.required) required.push(info);
+          else optional.push(info);
+        }
+        out += `--- Required Fields ---\n`;
+        out += required.length > 0 ? required.join('\n') : "  (none)";
+        out += `\n\n--- Optional Fields ---\n`;
+        out += optional.length > 0 ? optional.join('\n') : "  (none)";
+        
         return textResponse(out);
       }
 
@@ -1743,8 +1913,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!args.time_spent || !args.time_spent.trim()) return errorResponse("time_spent is required (e.g. '2h', '1d', '30m').");
 
         const client = getJiraClient();
-        const result = await client.logWork(args.ticket_key, args.time_spent, args.comment || '');
-        return textResponse(`Logged ${result.timeSpent} on ${args.ticket_key} by ${result.author}`);
+        try {
+          const result = await client.logWork(args.ticket_key, args.time_spent, args.comment || '');
+          return textResponse(`Logged ${result.timeSpent} on ${args.ticket_key} by ${result.author}`);
+        } catch (err) {
+          if (err instanceof JiraNetworkError) {
+            OfflineQueue.addAction({ type: "log_work", args });
+            return textResponse(`You are offline. Logging ${args.time_spent} on ${args.ticket_key} has been queued and will be synced later.`);
+          }
+          throw err;
+        }
       }
 
       // ── run_skill ─────────────────────────────────────────────────────

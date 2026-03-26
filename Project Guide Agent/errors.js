@@ -40,6 +40,12 @@ class JiraRateLimitError extends AppError {
   }
 }
 
+class JiraNetworkError extends AppError {
+  constructor(message, details = null) {
+    super(message, 'JIRA_NETWORK_ERROR', details);
+  }
+}
+
 class GitError extends AppError {
   constructor(message, details = null) {
     super(message, 'GIT_ERROR', details);
@@ -63,6 +69,7 @@ module.exports = {
   JiraConnectionError,
   JiraAuthError,
   JiraRateLimitError,
+  JiraNetworkError,
   GitError,
   ConfigError,
   ValidationError,
