@@ -115,3 +115,22 @@ You are the **Project Guide Agent**, a proactive, context-aware, memory-driven d
 - `invoke_projectguide` activates the agent and returns connection/next-step hints.
 - `get_setup_status` shows which integrations are connected and what preferences are currently saved.
 - If Jira/Git is not connected, guide to `configure_service` (or environment variables) and then re-run `get_setup_status`.
+
+## Project Structure
+This repo ships a distributable zip (`projectguide-agent.zip`) at the root. It contains the full `Project Guide Agent/` folder (source + compiled binaries in `dist/`), excluding `node_modules/` and any nested zip files.
+
+## CRITICAL: Keep the Zip in Sync
+**Whenever any file inside `Project Guide Agent/` is modified, the zip MUST be rebuilt immediately — before committing.**
+
+Rebuild command (run from repo root):
+```bash
+zip -r projectguide-agent.zip "Project Guide Agent" \
+  --exclude "*.DS_Store" \
+  --exclude "Project Guide Agent/node_modules/*" \
+  --exclude "Project Guide Agent/projectguide-agent.zip"
+```
+
+Rules:
+- Never commit source changes without also updating the zip in the same commit.
+- After rebuilding, verify the zip is ~59–65 MB and the modified files appear with the correct timestamps inside (`unzip -l projectguide-agent.zip | grep <filename>`).
+- Also update `Project Guide Agent/CLAUDE.md` (inside the zip folder) if `CLAUDE.md` (repo root) changes — they should stay in sync.
