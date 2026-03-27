@@ -29,6 +29,7 @@ class JiraReadSkill extends BaseSkill {
             assignee: { type: "string", description: "Filter by assignee (or 'currentUser')" },
             status: { type: "string", description: "Comma-separated statuses (e.g. 'To Do,In Progress')" },
             sprint: { type: "string", description: "Sprint name" },
+            project: { type: "string", description: "Project key (e.g. CMDN). Required when querying a specific project." },
             updated_since: { type: "string", description: "Updated since (e.g. '-7d')" },
             jql: { type: "string", description: "Raw JQL query (overrides other filters)" },
             start_at: { type: "number", description: "Pagination offset (default: 0)" },
@@ -49,7 +50,12 @@ class JiraReadSkill extends BaseSkill {
       {
         name: "analyze_workload",
         description: "Categorize all assigned tickets: Done, In Progress, Not Started, Blocked, Overdue. Includes smart blocker detection via issue links.",
-        inputSchema: { type: "object", properties: {} },
+        inputSchema: {
+          type: "object",
+          properties: {
+            project: { type: "string", description: "Project key to filter by (e.g. CMDN). Uses last project if omitted." },
+          },
+        },
       },
       {
         name: "list_projects",
@@ -153,6 +159,10 @@ class JiraReadSkill extends BaseSkill {
                 : `assignee = "${args.assignee}"`
             );
           }
+          const fetchProject = args.project || preferences.last_project;
+          if (fetchProject) {
+            clauses.push(`project = "${fetchProject}"`);
+          }
           if (args.status) {
             const statuses = args.status.split(",").map(s => `"${s.trim()}"`).join(",");
             clauses.push(`status in (${statuses})`);
@@ -177,7 +187,16 @@ class JiraReadSkill extends BaseSkill {
         if (result.total > tickets.length) {
           out += ` (showing ${tickets.length} of ${result.total})`;
         }
-        out += `\n\n`;
+        out += `\nQuery: ${jqlString}\n\n`;
+
+        // Warn if results don't match the requested project
+        const requestedProject = args.project || preferences.last_project;
+        if (requestedProject && tickets.length > 0) {
+          const wrongProject = tickets.filter(t => !t.key.startsWith(requestedProject + '-'));
+          if (wrongProject.length > 0) {
+            out += `WARNING: ${wrongProject.length} ticket(s) returned from a different project (expected ${requestedProject}). Check that the project key is correct.\n\n`;
+          }
+        }
 
         const categories = {};
         for (const t of tickets) {
@@ -254,7 +273,11 @@ class JiraReadSkill extends BaseSkill {
 
       case "analyze_workload": {
         const client = getJiraClient();
-        const result = await client.searchTickets("assignee = currentUser() ORDER BY priority DESC, duedate ASC");
+        const workloadProject = args.project || preferences.last_project;
+        const workloadClauses = ['assignee = currentUser()'];
+        if (workloadProject) workloadClauses.push(`project = "${workloadProject}"`);
+        const workloadJql = workloadClauses.join(' AND ') + ' ORDER BY priority DESC, duedate ASC';
+        const result = await client.searchTickets(workloadJql);
         const tickets = result.tickets;
         const now = new Date();
 
@@ -383,7 +406,7 @@ class JiraReadSkill extends BaseSkill {
         const result = await client.searchTickets(jql, [...CONST.JIRA_DEFAULT_FIELDS, 'issuetype']);
         const tickets = result.tickets;
 
-        if (tickets.length === 0) return this.textResponse(`No tickets found. Filters used: ${clauses.join(', ')}`);
+        if (tickets.length === 0) return this.textResponse(`No tickets found.\nQuery: ${jql}`);
 
         const categories = { Bug: [], Story: [], Task: [], 'Sub-task': [], Epic: [], Other: [] };
         const now = new Date();
@@ -394,7 +417,7 @@ class JiraReadSkill extends BaseSkill {
           cat.push(t);
         }
 
-        let out = `Tickets Found: ${tickets.length}\nProject: ${project} | Sprint: ${sprint}\n\n`;
+        let out = `Tickets Found: ${tickets.length}\nProject: ${project} | Sprint: ${sprint}\nQuery: ${jql}\n\n`;
         for (const [type, items] of Object.entries(categories)) {
           if (items.length === 0) continue;
           out += `--- ${type}s (${items.length}) ---\n`;
@@ -545,8 +568,22 @@ class JiraReadSkill extends BaseSkill {
 
         if (tickets.length === 0) return this.textResponse(`No tickets found.\nQuery: ${jqlString}`);
 
+        // Validate that returned tickets belong to the requested project
+        const expectedProject = resolvedProject;
+        if (expectedProject && tickets.length > 0) {
+          const wrongProject = tickets.filter(t => !t.key.startsWith(expectedProject + '-'));
+          if (wrongProject.length > 0) {
+            return this.errorResponse(
+              `WARNING: Results contain ${wrongProject.length} ticket(s) NOT from project ${expectedProject} ` +
+              `(e.g. ${wrongProject[0].key}). The project key may be wrong or stale.\n` +
+              `Query used: ${jqlString}\n` +
+              `Please verify the project key via 'list_projects' and retry.`
+            );
+          }
+        }
+
         const now = new Date();
-        let out = `Prioritized Ticket List:\n\n`;
+        let out = `Prioritized Ticket List:\n\nQuery: ${jqlString}\n\n`;
         for (const t of tickets) {
           const dueDate = t.dueDate ? new Date(t.dueDate) : null;
           const overdue = dueDate && dueDate < now && t.statusCategory !== 'Done';
@@ -556,7 +593,6 @@ class JiraReadSkill extends BaseSkill {
         }
 
         out += `\nShowing ${tickets.length} ticket(s).\n`;
-        out += `\nQuery: ${jqlString}\n`;
         return this.textResponse(out);
       }
 
