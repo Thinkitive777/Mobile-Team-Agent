@@ -17,6 +17,10 @@ module.exports = Object.freeze({
   CONFIG_FILE_PERMISSIONS: 0o600,
   REPORT_FILE_PERMISSIONS: 0o600,
 
+  // Desktop project-based update storage
+  DESKTOP_DIR: path.join(os.homedir(), 'Desktop'),
+  DESKTOP_UPDATES_DIR: path.join(os.homedir(), 'Desktop', 'ProjectGuide-Updates'),
+
   // Jira API
   JIRA_MAX_RESULTS: 50,
   JIRA_REQUEST_TIMEOUT_MS: 15000,

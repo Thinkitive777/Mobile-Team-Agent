@@ -3,6 +3,7 @@ const { validate, dateSchema } = require("../Utils/validators");
 const CONST = require("../Constants/constants");
 const ReportManager = require("../Services/report-manager");
 const GitUtils = require("../Utils/git-utils");
+const Logger = require("../Utils/logger");
 
 class WorkflowSkill extends BaseSkill {
   constructor() {
@@ -14,16 +15,27 @@ class WorkflowSkill extends BaseSkill {
     return [
       {
         name: "morning_standup",
-        description: "Generate morning standup: pending tickets, recent commits, prioritized daily plan. Works even if Jira is unavailable (falls back to Git data).",
+        description: "Generate morning standup when user greets (Good morning / Hi / start my day): pending tickets, recent commits, prioritized daily plan. Works even if Jira is unavailable.",
         inputSchema: { type: "object", properties: {} },
       },
       {
+        name: "get_daily_updates",
+        description: "Return a summary of today's work when user asks for updates (e.g. 'today's updates', 'my updates', 'provide updates', 'what have I done today'). Aggregates GitHub commits, Jira ticket progress, and code changes.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project: { type: "string", description: "Jira project key to scope ticket query (optional)" },
+          },
+        },
+      },
+      {
         name: "end_of_day_report",
-        description: "Generate, save, and display end-of-day report. Includes carry-forward from yesterday.",
+        description: "Generate, save, and display end-of-day report. Saves to ~/.projectguide-agent and also to Desktop/ProjectGuide-Updates/<project>/ when a project is active.",
         inputSchema: {
           type: "object",
           properties: {
             date: { type: "string", description: "Report date (default: today, YYYY-MM-DD)" },
+            project_name: { type: "string", description: "Project name for Desktop storage (default: active Jira project)" },
           },
         },
       },
@@ -40,7 +52,7 @@ class WorkflowSkill extends BaseSkill {
       },
       {
         name: "list_daily_reports",
-        description: "List all saved daily reports with optional date range.",
+        description: "List all saved daily reports with optional date range. Includes Desktop project-based reports.",
         inputSchema: {
           type: "object",
           properties: {
@@ -58,7 +70,17 @@ class WorkflowSkill extends BaseSkill {
             end_date: { type: "string", description: "Week ending date (default: today)" },
           },
         },
-      }
+      },
+      {
+        name: "get_consolidated_summary",
+        description: "Generate a consolidated summary of all work done across all projects for a given day. Aggregates tasks and progress from Desktop project-based reports.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            date: { type: "string", description: "Date to summarize (default: today, YYYY-MM-DD)" },
+          },
+        },
+      },
     ];
   }
 
@@ -71,7 +93,7 @@ class WorkflowSkill extends BaseSkill {
   }
 
   async handleTool(name, args, context) {
-    const { getJiraClient, getRepoPath, preferences } = context;
+    const { getJiraClient, getRepoPath, preferences, config } = context;
 
     switch (name) {
       case "morning_standup": {
@@ -184,12 +206,99 @@ class WorkflowSkill extends BaseSkill {
         return this.textResponse(out);
       }
 
+      case "get_daily_updates": {
+        // Intent-based updates: "today's updates", "my updates", "provide updates"
+        // Returns a focused summary of what the user has done today.
+        const now = new Date();
+        const todayStr = ReportManager.formatDate(now);
+        const projectFilter = args.project || preferences.last_project || null;
+
+        let commits = [];
+        let gitError = null;
+        try { commits = await GitUtils.getTodayCommits(getRepoPath()); } catch (err) { gitError = err.message; }
+
+        let updatedTickets = [];
+        let completedTickets = [];
+        let inProgressTickets = [];
+        let jiraError = null;
+        try {
+          const client = getJiraClient();
+          const projectClause = projectFilter ? ` AND project = "${projectFilter}"` : '';
+          const result = await client.searchTickets(
+            `assignee = currentUser() AND updated >= "${todayStr}"${projectClause} ORDER BY updated DESC`
+          );
+          updatedTickets = result.tickets;
+          completedTickets = result.tickets.filter(t => t.statusCategory === "Done" || t.status === "Done");
+          inProgressTickets = result.tickets.filter(t => t.status === "In Progress");
+        } catch (err) {
+          jiraError = err.message;
+        }
+
+        let out = `Daily Updates — ${now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}\n\n`;
+        if (projectFilter) out += `Project: ${projectFilter}\n\n`;
+
+        // Commits section
+        if (commits.length > 0) {
+          out += `## Code Changes (${commits.length} commit(s) today)\n`;
+          for (const c of commits) {
+            const ticketTag = c.ticketIds.length > 0 ? ` [${c.ticketIds.join(', ')}]` : '';
+            out += `  - ${c.hash}: ${c.message}${ticketTag}\n`;
+          }
+          out += '\n';
+        } else if (!gitError) {
+          out += `## Code Changes\n  - No commits today\n\n`;
+        }
+        if (gitError) out += `[Git unavailable: ${gitError}]\n\n`;
+
+        // Jira ticket progress
+        if (!jiraError) {
+          if (completedTickets.length > 0) {
+            out += `## Completed Tickets (${completedTickets.length})\n`;
+            for (const t of completedTickets) out += `  - ${t.key}: ${t.summary}\n`;
+            out += '\n';
+          }
+          if (inProgressTickets.length > 0) {
+            out += `## In Progress (${inProgressTickets.length})\n`;
+            for (const t of inProgressTickets) out += `  - ${t.key}: ${t.summary}\n`;
+            out += '\n';
+          }
+          if (updatedTickets.length > 0 && completedTickets.length === 0 && inProgressTickets.length === 0) {
+            out += `## Updated Tickets (${updatedTickets.length})\n`;
+            for (const t of updatedTickets) out += `  - ${t.key}: ${t.summary} [${t.status}]\n`;
+            out += '\n';
+          }
+          if (updatedTickets.length === 0) {
+            out += `## Jira Tickets\n  - No tickets updated today\n\n`;
+          }
+        } else {
+          out += `[Jira unavailable: ${jiraError}]\n\n`;
+        }
+
+        // Summary line
+        const commitCount = commits.length;
+        const doneCount = completedTickets.length;
+        const wipCount = inProgressTickets.length;
+        out += `---\nSummary: ${commitCount} commit(s), ${doneCount} completed, ${wipCount} in progress`;
+        if (projectFilter) out += ` (project: ${projectFilter})`;
+        out += '\n';
+
+        return this.textResponse(out);
+      }
+
       case "end_of_day_report": {
         if (args.date) {
           const dateCheck = validate(dateSchema, args.date);
           if (!dateCheck.success) return this.errorResponse(dateCheck.error);
         }
         const reportDate = args.date || ReportManager.formatDate();
+
+        // Determine project name for Desktop storage
+        const projectName = args.project_name
+          || (config && config.jira && config.jira.active_project && config.jira.active_project !== '__default__'
+              ? config.jira.active_project
+              : null)
+          || preferences.last_project
+          || null;
 
         let commits = [];
         let gitError = null;
@@ -216,6 +325,7 @@ class WorkflowSkill extends BaseSkill {
         let notes = '';
         if (commits.length > 0) notes += `${commits.length} commit(s) made today. `;
         if (completed.length > 0) notes += `${completed.length} ticket(s) completed. `;
+        if (projectName) notes += `Project: ${projectName}. `;
         if (jiraError) notes += `[Jira was unavailable: ${jiraError}]`;
         if (!jiraError && gitError) notes += `[Git was unavailable: ${gitError}]`;
         if (!notes) notes = 'Quiet day.';
@@ -226,11 +336,25 @@ class WorkflowSkill extends BaseSkill {
           commits, carryForward, blockers: [], notes,
         });
 
+        // Always save to the standard reports directory
         const reportPath = ReportManager.saveReport(reportDate, report);
 
-        let out = `End-of-Day Report — ${reportDate}\n\nSaved to: ${reportPath}\n\nSummary:\n`;
+        // Also save to Desktop under the project directory if a project is active
+        let desktopPath = null;
+        if (projectName) {
+          try {
+            desktopPath = ReportManager.saveProjectReport(reportDate, report, projectName);
+          } catch (desktopErr) {
+            Logger.warn('Failed to save Desktop project report', { error: desktopErr.message });
+          }
+        }
+
+        let out = `End-of-Day Report — ${reportDate}\n\nSaved to: ${reportPath}\n`;
+        if (desktopPath) out += `Also saved to Desktop: ${desktopPath}\n`;
+        out += `\nSummary:\n`;
         out += `- ${commits.length} commit(s)\n- ${completed.length} ticket(s) completed\n`;
         out += `- ${inProgress.length} ticket(s) in progress\n- ${carryForward.length} item(s) carry forward\n`;
+        if (projectName) out += `- Project: ${projectName}\n`;
         if (jiraError) out += `\n[Jira was unavailable — report based on Git data only]\n`;
         if (gitError) out += `\n[Git was unavailable — commit section may be incomplete]\n`;
 
@@ -251,7 +375,11 @@ class WorkflowSkill extends BaseSkill {
         if (args.end_date) { const c = validate(dateSchema, args.end_date); if (!c.success) return this.errorResponse(c.error); }
 
         const reports = ReportManager.listReports(args.start_date, args.end_date);
-        if (reports.length === 0) return this.textResponse("No daily reports found.");
+        const desktopProjects = ReportManager.listProjectNames();
+
+        if (reports.length === 0 && desktopProjects.length === 0) {
+          return this.textResponse("No daily reports found.");
+        }
 
         let out = `Daily Reports (${reports.length})\n\n`;
         for (const r of reports) {
@@ -263,6 +391,21 @@ class WorkflowSkill extends BaseSkill {
             out += `${r.date}: (file missing)\n`;
           }
         }
+
+        if (desktopProjects.length > 0) {
+          out += `\nDesktop project reports:\n`;
+          for (const p of desktopProjects) {
+            out += `  Project: ${p}\n`;
+            const pDir = ReportManager.getProjectDir(p);
+            const fs = require('fs');
+            const path = require('path');
+            const files = fs.readdirSync(pDir).filter(f => f.endsWith('.md'));
+            for (const f of files.sort().reverse().slice(0, 5)) {
+              out += `    - ${f.replace('.md', '')}\n`;
+            }
+          }
+        }
+
         return this.textResponse(out);
       }
 
@@ -273,6 +416,15 @@ class WorkflowSkill extends BaseSkill {
         }
         const endDate = args.end_date ? new Date(args.end_date) : new Date();
         return this.textResponse(ReportManager.generateWeeklySummary(endDate));
+      }
+
+      case "get_consolidated_summary": {
+        if (args.date) {
+          const c = validate(dateSchema, args.date);
+          if (!c.success) return this.errorResponse(c.error);
+        }
+        const summaryDate = args.date ? new Date(args.date) : new Date();
+        return this.textResponse(ReportManager.generateConsolidatedSummary(summaryDate));
       }
 
       default:

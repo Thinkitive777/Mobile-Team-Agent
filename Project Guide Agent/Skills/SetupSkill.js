@@ -28,7 +28,7 @@ class SetupSkill extends BaseSkill {
       },
       {
         name: "configure_service",
-        description: "Configure Jira or GitHub. Jira requires url, email, token. GitHub requires token.",
+        description: "Configure Jira or GitHub. Jira requires url, email, token. Optionally provide project_name to store credentials per project. GitHub requires token.",
         inputSchema: {
           type: "object",
           properties: {
@@ -36,10 +36,21 @@ class SetupSkill extends BaseSkill {
             url: { type: "string", description: "Jira instance URL (Jira only)" },
             email: { type: "string", description: "Jira email (Jira only)" },
             token: { type: "string", description: "API token" },
+            project_name: { type: "string", description: "Project name to scope these Jira credentials (e.g. 'MyProject'). Enables per-project isolation." },
             user: { type: "string", description: "GitHub username" },
             repo: { type: "string", description: "GitHub repo (owner/repo)" },
           },
           required: ["service", "token"],
+        },
+      },
+      {
+        name: "switch_jira_project",
+        description: "Switch the active Jira project. Loads the credentials stored for that project. Lists available configured projects if no project_name given.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project_name: { type: "string", description: "Project name to switch to" },
+          },
         },
       },
       {
@@ -82,7 +93,11 @@ class SetupSkill extends BaseSkill {
 
     switch (name) {
       case "invoke_projectguide": {
-        const jiraCredOk = (config.jira.url && config.jira.email && config.jira.token && !isTokenMasked(config.jira.token));
+        const activeProject = config.jira.active_project;
+        const activeCreds = activeProject && config.jira.projects && config.jira.projects[activeProject]
+          ? config.jira.projects[activeProject]
+          : { url: config.jira.url, email: config.jira.email, token: config.jira.token };
+        const jiraCredOk = !!(activeCreds.url && activeCreds.email && activeCreds.token && !isTokenMasked(activeCreds.token));
         const jiraOk = (config.jira.connected && jiraCredOk) || !!process.env.JIRA_URL;
         const githubOk = config.github.connected || !!process.env.GITHUB_TOKEN;
         const missing = [];
@@ -97,27 +112,39 @@ class SetupSkill extends BaseSkill {
           out += `Setup required: ${missing.join(", ")}.\n`;
           out += `Use 'configure_service' or set environment variables.\n`;
         } else {
+          const projectList = config.jira.projects ? Object.keys(config.jira.projects) : [];
           out += "All services connected. Use 'morning_standup' or 'analyze_workload' to begin.\n";
+          if (activeProject) out += `Active Jira project: ${activeProject}\n`;
+          if (projectList.length > 1) out += `Configured projects: ${projectList.join(', ')} — use 'switch_jira_project' to switch.\n`;
         }
         return this.textResponse(out);
       }
 
       case "get_setup_status": {
-        const jiraToken = config.jira.token || process.env.JIRA_TOKEN;
-        const jiraEmail = config.jira.email || process.env.JIRA_EMAIL;
-        const jiraUrl = config.jira.url || process.env.JIRA_URL;
+        const activeProject = config.jira.active_project;
+        const activeCreds = activeProject && config.jira.projects && config.jira.projects[activeProject]
+          ? config.jira.projects[activeProject]
+          : { url: config.jira.url, email: config.jira.email, token: config.jira.token };
+        const jiraToken = process.env.JIRA_TOKEN || activeCreds.token;
+        const jiraEmail = process.env.JIRA_EMAIL || activeCreds.email;
+        const jiraUrl = process.env.JIRA_URL || activeCreds.url;
         const jiraCredOk = !!(jiraUrl && jiraEmail && jiraToken && !isTokenMasked(jiraToken));
         const jiraConnected = (config.jira.connected && jiraCredOk) || !!process.env.JIRA_URL;
         const githubConnected = config.github.connected || !!process.env.GITHUB_TOKEN;
+        const configuredProjects = config.jira.projects ? Object.keys(config.jira.projects) : [];
 
         let out = `Project Guide Agent v${CONST.VERSION} — Setup Status\n\n`;
 
         out += `--- Connections ---\n`;
         if (jiraConnected) {
           out += `Jira: Connected\n`;
+          out += `  Active project: ${activeProject || '(default)'}\n`;
           out += `  URL: ${jiraUrl}\n`;
           out += `  Email: ${jiraEmail}\n`;
           out += `  Token: ${maskToken(jiraToken)}\n`;
+          if (configuredProjects.length > 1) {
+            out += `  All configured projects: ${configuredProjects.join(', ')}\n`;
+          }
         } else if (config.jira.connected && !jiraCredOk) {
           out += `Jira: CORRUPTED — credentials incomplete or token is masked\n`;
           out += `  Action: run 'configure_service' with service='jira' to re-enter credentials\n`;
@@ -142,9 +169,15 @@ class SetupSkill extends BaseSkill {
         out += `\n`;
 
         const reportCount = ReportManager.listReports().length;
+        const desktopProjects = ReportManager.listProjectNames();
         out += `--- Reports ---\n`;
         out += `Saved: ${reportCount} daily report(s)\n`;
-        out += `Directory: ${ReportManager.REPORTS_DIR}\n\n`;
+        out += `Directory: ${ReportManager.REPORTS_DIR}\n`;
+        if (desktopProjects.length > 0) {
+          out += `Desktop project reports: ${desktopProjects.join(', ')}\n`;
+          out += `Desktop directory: ${ReportManager.DESKTOP_UPDATES_DIR}\n`;
+        }
+        out += `\n`;
 
         const missing = [];
         if (!jiraConnected) missing.push("Jira (use 'configure_service' with service='jira')");
@@ -168,7 +201,7 @@ class SetupSkill extends BaseSkill {
       }
 
       case "configure_service": {
-        const { service, url, email, token, user, repo } = args;
+        const { service, url, email, token, project_name, user, repo } = args;
 
         const svcCheck = validate(serviceSchema, service);
         if (!svcCheck.success) return this.errorResponse(svcCheck.error);
@@ -194,7 +227,22 @@ class SetupSkill extends BaseSkill {
 
           // Normalize URL — strip trailing slash
           const normalizedUrl = url.replace(/\/$/, '');
-          config.jira = { connected: true, url: normalizedUrl, email, token };
+
+          // Ensure projects map exists
+          if (!config.jira.projects) config.jira.projects = {};
+
+          // Determine project key: use provided project_name or fall back to '__default__'
+          const projectKey = project_name ? project_name.trim() : (config.jira.active_project || '__default__');
+
+          // Store credentials under the project key
+          config.jira.projects[projectKey] = { url: normalizedUrl, email, token };
+
+          // Update flat fields to reflect the active project (backward compat)
+          config.jira.active_project = projectKey;
+          config.jira.url = normalizedUrl;
+          config.jira.email = email;
+          config.jira.token = token;
+          config.jira.connected = true;
         } else if (service === "github") {
           if (!token) return this.errorResponse("GitHub token is required.");
           config.github = { connected: true, token, user: user || null, repo: repo || null };
@@ -204,6 +252,14 @@ class SetupSkill extends BaseSkill {
 
         let out = `${service} configured successfully.\n`;
         if (service === "jira") {
+          const projectKey = config.jira.active_project;
+          if (projectKey && projectKey !== '__default__') {
+            out += `Credentials stored for project: ${projectKey}\n`;
+          }
+          const allProjects = Object.keys(config.jira.projects || {});
+          if (allProjects.length > 1) {
+            out += `All configured projects: ${allProjects.join(', ')}\n`;
+          }
           try {
             const client = getJiraClient();
             const result = await client.testConnection();
@@ -216,6 +272,53 @@ class SetupSkill extends BaseSkill {
             out += `Warning: Connection test failed — ${testErr.message}\n`;
             out += `Credentials saved but may be incorrect. Use 'jira_connection_test' to debug.\n`;
           }
+        }
+        return this.textResponse(out);
+      }
+
+      case "switch_jira_project": {
+        const { project_name } = args;
+        const configuredProjects = config.jira.projects ? Object.keys(config.jira.projects) : [];
+
+        if (!project_name) {
+          if (configuredProjects.length === 0) {
+            return this.textResponse("No Jira projects configured yet. Use 'configure_service' with project_name to add one.");
+          }
+          let out = `Configured Jira projects:\n`;
+          for (const p of configuredProjects) {
+            const creds = config.jira.projects[p];
+            const active = p === config.jira.active_project ? ' (active)' : '';
+            out += `  - ${p}${active}: ${creds.url} / ${creds.email}\n`;
+          }
+          out += `\nUse switch_jira_project with project_name to switch.`;
+          return this.textResponse(out);
+        }
+
+        const key = project_name.trim();
+        if (!config.jira.projects || !config.jira.projects[key]) {
+          const available = configuredProjects.length > 0 ? `Available: ${configuredProjects.join(', ')}` : 'No projects configured yet.';
+          return this.errorResponse(
+            `No Jira credentials found for project '${key}'. ${available}\n` +
+            `Use 'configure_service' with service='jira' and project_name='${key}' to add credentials.`
+          );
+        }
+
+        const creds = config.jira.projects[key];
+        config.jira.active_project = key;
+        config.jira.url = creds.url;
+        config.jira.email = creds.email;
+        config.jira.token = creds.token;
+        config.jira.connected = true;
+        saveConfig();
+
+        let out = `Switched to Jira project: ${key}\n`;
+        out += `  URL: ${creds.url}\n  Email: ${creds.email}\n`;
+        try {
+          const client = getJiraClient();
+          const result = await client.testConnection();
+          out += `Connection verified! Logged in as: ${result.user} (${result.email})\n`;
+        } catch (testErr) {
+          out += `Warning: Connection test failed — ${testErr.message}\n`;
         }
         return this.textResponse(out);
       }

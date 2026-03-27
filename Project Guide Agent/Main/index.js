@@ -28,14 +28,39 @@ if (!fs.existsSync(CONST.CONFIG_DIR)) {
 }
 
 let config = {
-  jira: { connected: false, url: null, email: null, token: null },
+  jira: {
+    connected: false,
+    active_project: null,
+    // Flat credentials kept for backward compatibility (used when no active_project)
+    url: null, email: null, token: null,
+    // Per-project credential store: { [projectName]: { url, email, token } }
+    projects: {},
+  },
   github: { connected: false, token: null, user: null, repo: null },
   developer_mode: false,
 };
 
 if (fs.existsSync(CONST.CONFIG_FILE)) {
   try {
-    config = JSON.parse(fs.readFileSync(CONST.CONFIG_FILE, "utf-8"));
+    const loaded = JSON.parse(fs.readFileSync(CONST.CONFIG_FILE, "utf-8"));
+    // Migrate legacy flat jira config into the new project-oriented structure
+    if (loaded.jira && !loaded.jira.projects) {
+      loaded.jira.projects = {};
+    }
+    if (loaded.jira && loaded.jira.url && loaded.jira.email && loaded.jira.token) {
+      const legacyKey = loaded.jira.active_project || '__default__';
+      if (!loaded.jira.projects[legacyKey]) {
+        loaded.jira.projects[legacyKey] = {
+          url: loaded.jira.url,
+          email: loaded.jira.email,
+          token: loaded.jira.token,
+        };
+        if (!loaded.jira.active_project) loaded.jira.active_project = legacyKey;
+      }
+    }
+    config = { ...config, ...loaded };
+    // Ensure projects always exists
+    if (!config.jira.projects) config.jira.projects = {};
   } catch (e) {
     Logger.error("Config file corrupted, using defaults", { error: e.message });
   }
@@ -47,15 +72,19 @@ function isTokenMasked(token) {
   return token === '********' || token === 'tok_****' || /^\*+$/.test(token) || token.startsWith('tok_****');
 }
 
-// On startup: if connected=true but credentials are missing or corrupted,
-// reset to disconnected so tools fail-fast with a clear message rather than
-// silently using bad credentials.
+// On startup: if connected=true but the active project's credentials are missing or corrupted,
+// reset to disconnected so tools fail-fast with a clear message.
 (function validateConfigIntegrity() {
   if (config.jira && config.jira.connected) {
-    const { url, email, token } = config.jira;
+    const activeKey = config.jira.active_project;
+    const creds = activeKey && config.jira.projects && config.jira.projects[activeKey]
+      ? config.jira.projects[activeKey]
+      : { url: config.jira.url, email: config.jira.email, token: config.jira.token };
+    const { url, email, token } = creds;
     if (!url || !email || !token || isTokenMasked(token)) {
       Logger.warn('Jira config integrity check failed — resetting connected=false', {
-        hasUrl: !!url, hasEmail: !!email, hasToken: !!token, tokenMasked: isTokenMasked(token)
+        activeProject: activeKey,
+        hasUrl: !!url, hasEmail: !!email, hasToken: !!token, tokenMasked: isTokenMasked(token),
       });
       config.jira.connected = false;
     }
@@ -106,10 +135,27 @@ function maskToken(token) {
   return `tok_****${token.slice(-4)}`;
 }
 
-function getJiraClient() {
-  const url = process.env.JIRA_URL || config.jira.url;
-  const email = process.env.JIRA_EMAIL || config.jira.email;
-  const token = process.env.JIRA_TOKEN || config.jira.token;
+function getJiraClient(projectName = null) {
+  // Resolve which project's credentials to use:
+  // 1. Explicitly requested project (via arg)
+  // 2. Active project from config
+  // 3. Flat legacy credentials
+  // 4. Environment variables
+  const targetProject = projectName || config.jira.active_project;
+  let url, email, token;
+
+  if (targetProject && config.jira.projects && config.jira.projects[targetProject]) {
+    ({ url, email, token } = config.jira.projects[targetProject]);
+  } else {
+    url = config.jira.url;
+    email = config.jira.email;
+    token = config.jira.token;
+  }
+
+  // Environment variables override stored credentials
+  url = process.env.JIRA_URL || url;
+  email = process.env.JIRA_EMAIL || email;
+  token = process.env.JIRA_TOKEN || token;
 
   if (isTokenMasked(token)) {
     throw new ConfigError(
@@ -119,8 +165,9 @@ function getJiraClient() {
   }
   if (!url || !email || !token) {
     const missing = [!url && 'url', !email && 'email', !token && 'token'].filter(Boolean).join(', ');
+    const projectHint = targetProject ? ` for project '${targetProject}'` : '';
     throw new ConfigError(
-      `Jira not fully configured (missing: ${missing}). ` +
+      `Jira not fully configured${projectHint} (missing: ${missing}). ` +
       "Run 'configure_service' with service='jira', url, email, and token."
     );
   }

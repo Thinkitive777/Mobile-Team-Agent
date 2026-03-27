@@ -1,17 +1,122 @@
 const fs = require('fs');
 const path = require('path');
 
-const { REPORTS_DIR, REPORT_FILE_PERMISSIONS } = require('../Constants/constants');
+const { REPORTS_DIR, REPORT_FILE_PERMISSIONS, DESKTOP_UPDATES_DIR } = require('../Constants/constants');
 const { AppError } = require('../Utils/errors');
 const Logger = require('../Utils/logger');
 
 class ReportManager {
   static REPORTS_DIR = REPORTS_DIR;
+  static DESKTOP_UPDATES_DIR = DESKTOP_UPDATES_DIR;
 
   static ensureDir() {
     if (!fs.existsSync(this.REPORTS_DIR)) {
       fs.mkdirSync(this.REPORTS_DIR, { recursive: true, mode: 0o700 });
     }
+  }
+
+  // ── Project-based Desktop storage ─────────────────────────────────────
+
+  static getProjectDir(projectName) {
+    const safe = projectName.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    const dir = path.join(this.DESKTOP_UPDATES_DIR, safe);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    }
+    return dir;
+  }
+
+  static getProjectReportPath(date, projectName) {
+    const dir = this.getProjectDir(projectName);
+    const dateStr = typeof date === 'string' ? date : this.formatDate(date);
+    return path.join(dir, `${dateStr}.md`);
+  }
+
+  static saveProjectReport(date, content, projectName) {
+    const reportPath = this.getProjectReportPath(date, projectName);
+    try {
+      fs.writeFileSync(reportPath, content, { encoding: 'utf-8', mode: REPORT_FILE_PERMISSIONS });
+      Logger.info('Project report saved', { date, project: projectName, path: reportPath });
+      return reportPath;
+    } catch (err) {
+      Logger.error('Failed to save project report', { date, project: projectName, error: err.message });
+      throw new AppError(`Failed to save project report for ${date}/${projectName}: ${err.message}`, 'REPORT_SAVE_ERROR');
+    }
+  }
+
+  static getProjectReport(date, projectName) {
+    const reportPath = this.getProjectReportPath(date, projectName);
+    if (!fs.existsSync(reportPath)) return null;
+    return fs.readFileSync(reportPath, 'utf-8');
+  }
+
+  static listProjectNames() {
+    if (!fs.existsSync(this.DESKTOP_UPDATES_DIR)) return [];
+    return fs.readdirSync(this.DESKTOP_UPDATES_DIR, { withFileTypes: true })
+      .filter(d => d.isDirectory())
+      .map(d => d.name);
+  }
+
+  /**
+   * Generate a consolidated summary of all project reports for a given date.
+   * Aggregates completed items, in-progress tasks, and commits across all projects.
+   */
+  static generateConsolidatedSummary(date = new Date()) {
+    const dateStr = this.formatDate(date);
+    const projects = this.listProjectNames();
+
+    if (projects.length === 0) {
+      return `# Consolidated Summary — ${dateStr}\n\nNo project reports found. End-of-day reports will appear here when saved with a project name.`;
+    }
+
+    let summary = `# Consolidated Summary — ${dateStr}\n\n`;
+    summary += `Projects tracked: ${projects.join(', ')}\n\n`;
+
+    const allCompleted = [];
+    const allInProgress = [];
+    let totalCommits = 0;
+    const projectSummaries = [];
+
+    for (const project of projects) {
+      const content = this.getProjectReport(dateStr, project);
+      if (!content) continue;
+
+      const sections = this._extractSections(content);
+      allCompleted.push(...sections.completed.map(i => `[${project}] ${i}`));
+      allInProgress.push(...sections.inProgress.map(i => `[${project}] ${i}`));
+      totalCommits += sections.commitCount;
+
+      projectSummaries.push({
+        project,
+        completed: sections.completed.length,
+        inProgress: sections.inProgress.length,
+        commits: sections.commitCount,
+      });
+    }
+
+    summary += `## Overview\n`;
+    summary += `- Total items completed: ${allCompleted.length}\n`;
+    summary += `- Total items in progress: ${allInProgress.length}\n`;
+    summary += `- Total commits: ${totalCommits}\n\n`;
+
+    summary += `## Per-Project Breakdown\n`;
+    for (const p of projectSummaries) {
+      summary += `- **${p.project}**: ${p.completed} completed, ${p.inProgress} in progress, ${p.commits} commit(s)\n`;
+    }
+    summary += '\n';
+
+    summary += `## All Completed Today\n`;
+    summary += allCompleted.length > 0
+      ? allCompleted.map(i => `- ${i}`).join('\n') + '\n'
+      : '- None\n';
+    summary += '\n';
+
+    summary += `## Still In Progress\n`;
+    summary += allInProgress.length > 0
+      ? allInProgress.map(i => `- ${i}`).join('\n') + '\n'
+      : '- None\n';
+
+    return summary;
   }
 
   static formatDate(date = new Date()) {
