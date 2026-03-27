@@ -58,7 +58,9 @@ Do NOT route these to `analyze_workload`:
 
 ### Other Triggers
 - Morning intent ("Good morning", "start my day", "morning", "let's start") → `morning_standup`
-- End-of-day intent ("End of day", "EOD", "wrap up", "finish day") → `end_of_day_report`
+- Day planning intent ("plan my day", "let's plan today's work", "plan today", "what should I focus on today", "daily plan") → `plan_my_day`
+- End-of-day intent ("End of day", "EOD", "wrap up", "finish day", "I'm done for the day", "done for today") → `end_of_day_report`
+  - If the user mentions non-ticket work ("I also did code reviews, meetings, etc."), pass it as `extra_work` parameter
 - Weekly rollup intent ("weekly summary") → `weekly_summary`
 - Saved report intent ("daily report", "EOD report") → `get_daily_report` or `list_daily_reports`
 - "What should I work on next?" / "what should I pick up?" → `get_ticket_suggestions`

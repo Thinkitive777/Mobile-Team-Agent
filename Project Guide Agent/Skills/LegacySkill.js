@@ -123,6 +123,7 @@ class LegacySkill extends BaseSkill {
           'list-tickets': 'list_tickets', 'list_tickets': 'list_tickets', 'tickets': 'list_tickets', 'my-tickets': 'list_tickets',
           'workload': 'analyze_workload', 'analyze-workload': 'analyze_workload',
           'standup': 'morning_standup', 'morning': 'morning_standup',
+          'plan-my-day': 'plan_my_day', 'plan-day': 'plan_my_day', 'daily-plan': 'plan_my_day',
           'eod': 'end_of_day_report',
           'health': 'health_check', 'health-check': 'health_check',
           'suggestions': 'get_ticket_suggestions', 'suggest': 'get_ticket_suggestions',

@@ -7,7 +7,7 @@ const os = require('os');
  */
 module.exports = Object.freeze({
   // Version
-  VERSION: '3.1.0',
+  VERSION: '3.2.0',
 
   // File system paths
   CONFIG_DIR: path.join(os.homedir(), '.projectguide-agent'),
@@ -38,6 +38,12 @@ module.exports = Object.freeze({
   COMMENT_PREVIEW_COUNT: 3,
   COMMITS_PREVIEW_LIMIT: 5,
   STANDUP_COMMIT_WINDOW: '48 hours ago',
+
+  // Commit content analysis
+  DIFF_MAX_COMMITS: 15,          // Max commits to fetch diffs for (avoid overload)
+  DIFF_CONTEXT_LINES: 3,         // Context lines in diff snippets
+  DIFF_MAX_LINES_PER_COMMIT: 200, // Truncate large diffs
+  DIFF_SUMMARY_MAX_FILES: 20,    // Max files to list in summary
 
   // Ticket ID regex
   TICKET_ID_PATTERN: /[A-Z][A-Z0-9]+-\d+/g,
