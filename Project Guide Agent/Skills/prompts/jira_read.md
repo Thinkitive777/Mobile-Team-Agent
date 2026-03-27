@@ -17,7 +17,7 @@ User says: `space name: cordio-med-dev`
 
 ---
 
-### 2. Always pass project key explicitly — never rely on defaults
+### 2. Always pass project key explicitly — never rely on stale defaults
 When the user specifies a project, **always pass it as the `project` parameter** to `list_tickets`, `fetch_jira_tickets`, `smart_ticket_query`, etc.
 
 Do NOT omit the project and assume the saved preference is correct — the saved preference may be stale or wrong (e.g. `PROJ` instead of `CMDN`).
@@ -26,7 +26,22 @@ If the user's query involves a specific project, pass `project = "CMDN"` explici
 
 ---
 
-### 3. Component filter is a supported parameter in `list_tickets`
+### 3. Ask for missing information — don't silently fail or return wrong results
+
+Before calling any ticket-listing tool, check what you know:
+
+| Missing info | Action |
+|---|---|
+| Project not specified AND not in preferences | Ask: "Which project? (e.g. CMDN)" — OR query globally if the user said "my tickets" with no other context |
+| Assignee not specified for someone else's tickets | Ask: "Whose tickets — your own, or a specific person?" |
+| Sprint needed for `smart_ticket_query` | Ask: "Which sprint? I can run `list_sprints` to show available ones." |
+| Status name ambiguous | Use closest match OR ask: "Did you mean 'QA Ready' or 'Ready for QA'?" |
+
+**Exception:** For "my tickets", "show me my tickets", "what am I working on?", "what's on my plate?" — these mean the **current user's open tickets**. Query with `assignee = currentUser()` globally (no project filter needed) since that correctly returns all assigned tickets across projects.
+
+---
+
+### 4. Component filter is a supported parameter in `list_tickets`
 The `list_tickets` tool has a `component` parameter. Use it directly:
 
 ```
@@ -37,7 +52,7 @@ Only use raw `jql` when you need JQL features not covered by named parameters (e
 
 ---
 
-### 4. Assignee matching
+### 5. Assignee matching
 Jira assignee matching is fuzzy — use the display name as provided by the user.
 - Try: `assignee = "Shekhar Manwar"` first
 - If that returns 0 results, fall back to: `assignee ~ "shekhar"` (partial match)
@@ -45,7 +60,7 @@ Jira assignee matching is fuzzy — use the display name as provided by the user
 
 ---
 
-### 5. Confirm what you actually queried
+### 6. Confirm what you actually queried
 After fetching tickets, always show the user the JQL that was used:
 ```
 Query used: project = "CMDN" AND component = "iOS" AND assignee = "Shekhar Manwar" AND statusCategory != Done
@@ -54,7 +69,20 @@ This makes it easy to debug when results look wrong. All tools now include the q
 
 ---
 
-### 6. If results look wrong, say so — don't silently retry with bad data
+### 7. Zero results — diagnose before reporting
+If `list_tickets` returns 0 results, do NOT just say "no tickets found". Instead:
+1. Show the query that was used
+2. Offer to broaden filters: remove status filter, remove project filter, or use `include_done=true`
+3. Ask: "Want me to search without the status filter, or check a different project?"
+
+If the user says they have tickets but you found none:
+- Check `preferences.last_project` — it may be stale
+- Call `list_projects` to verify the project key
+- Try `assignee = currentUser()` with no project filter
+
+---
+
+### 8. If results look wrong, say so — don't silently retry with bad data
 If results show `PROJ-*` tickets instead of `CMDN-*`, that means:
 - The project key was not passed correctly, or the saved preference is stale
 - The tool will now return a WARNING when this happens
@@ -62,6 +90,24 @@ If results show `PROJ-*` tickets instead of `CMDN-*`, that means:
 In this case: stop, tell the user what happened, and ask them to confirm the exact project key from their Jira URL (e.g. `https://yourorg.atlassian.net/jira/software/projects/CMDN/boards`).
 
 Do NOT retry with the same wrong parameters.
+
+---
+
+## Prompt Variations → Tool Mapping
+
+| User says | Tool | Key params |
+|---|---|---|
+| "show me my tickets" / "my tickets" | `list_tickets` | assignee=currentUser (default) |
+| "what tasks do I have?" / "what am I working on?" | `list_tickets` | assignee=currentUser |
+| "what's on my plate?" / "list my work" | `list_tickets` | assignee=currentUser |
+| "show me CMDN tickets" | `list_tickets` | project=CMDN |
+| "show me bugs in CMDN" | `list_tickets` | project=CMDN, type=Bug |
+| "what's in progress?" | `list_tickets` | status=In Progress |
+| "what's ready for QA?" | `list_tickets` | status=QA Ready (or Ready for QA) |
+| "what's due this week?" | `list_tickets` | due_this_week=true |
+| "show high priority tickets" | `list_tickets` | priority=High,Highest |
+| "my tickets in the current sprint" | `list_tickets` | sprint=<active sprint name> |
+| "sprint board view" | `smart_ticket_query` | requires project + sprint + assignee |
 
 ---
 
@@ -74,13 +120,16 @@ Do NOT retry with the same wrong parameters.
 | Find project key from name | `list_projects` | Always do this when name ≠ key |
 | Sprint-based ticket view | `smart_ticket_query` | Requires project + sprint + assignee |
 | Full ticket detail | `get_ticket_details` | Use before any update |
-| Workload overview | `analyze_workload` | Supports optional `project` param |
+| Workload overview (categorized) | `analyze_workload` | Supports optional `project` param |
 
 ---
 
 ## JQL Cheat Sheet
 
 ```jql
+-- All my open tickets (global, no project filter)
+assignee = currentUser() AND statusCategory != Done ORDER BY priority DESC, duedate ASC
+
 -- Tickets by assignee + project + component (most common pattern)
 project = "CMDN" AND component = "iOS" AND assignee = "Shekhar Manwar" AND statusCategory != Done ORDER BY priority DESC, duedate ASC
 
@@ -95,6 +144,9 @@ project = "CMDN" AND assignee ~ "shekhar" AND statusCategory != Done
 
 -- Status filter (use exact Jira status names)
 project = "CMDN" AND status = "Ready for QA" AND assignee = "Shekhar Manwar"
+
+-- Bugs only
+project = "CMDN" AND issuetype = "Bug" AND assignee = currentUser() AND statusCategory != Done
 ```
 
 ---
@@ -107,3 +159,5 @@ project = "CMDN" AND status = "Ready for QA" AND assignee = "Shekhar Manwar"
 - ❌ Retry the same failed query without changing something
 - ❌ Substitute `currentUser()` when the user named a specific assignee
 - ❌ Use raw `jql` for component when `list_tickets` already has a `component` parameter
+- ❌ Say "no tickets found" without showing the query used and offering to broaden filters
+- ❌ Route "what's on my plate?" or "what am I working on?" to `analyze_workload` — use `list_tickets`

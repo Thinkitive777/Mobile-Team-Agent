@@ -3,6 +3,8 @@ const { StdioServerTransport } = require("@modelcontextprotocol/sdk/server/stdio
 const {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
 } = require("@modelcontextprotocol/sdk/types.js");
 const fs = require("fs");
 const path = require("path");
@@ -152,7 +154,7 @@ function isTicketBlocked(ticket) {
 
 const server = new Server(
   { name: "projectguide-agent", version: CONST.VERSION },
-  { capabilities: { tools: {} } }
+  { capabilities: { tools: {}, prompts: {} } }
 );
 
 // ── Skills Setup ────────────────────────────────────────────────────────
@@ -178,6 +180,30 @@ registry.register(new LegacySkill());
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: registry.getAllTools()
 }));
+
+// ── Prompts (exposes skill guidance to Claude via MCP prompts protocol) ──
+
+server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+  prompts: [
+    {
+      name: "projectguide-agent-instructions",
+      description: "Full agent instructions: intent routing, ticket listing, Jira query rules, missing-info handling, and tool selection guide.",
+    },
+  ],
+}));
+
+server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+  const promptText = registry.getCombinedPrompt();
+  return {
+    description: "Project Guide Agent — combined skill prompts",
+    messages: [
+      {
+        role: "user",
+        content: { type: "text", text: promptText },
+      },
+    ],
+  };
+});
 
 // ── Tool handlers ───────────────────────────────────────────────────────
 
