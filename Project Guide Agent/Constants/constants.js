@@ -19,7 +19,7 @@ module.exports = Object.freeze({
 
   // Desktop project-based update storage
   DESKTOP_DIR: path.join(os.homedir(), 'Desktop'),
-  DESKTOP_UPDATES_DIR: path.join(os.homedir(), 'Desktop', 'ProjectGuide-Updates'),
+  DESKTOP_UPDATES_DIR: path.join(os.homedir(), 'Desktop', 'Daily_Updates'),
 
   // Jira API
   JIRA_MAX_RESULTS: 50,

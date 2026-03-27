@@ -26,10 +26,17 @@ class ReportManager {
     return dir;
   }
 
+  static formatDailyFilename(dateStr) {
+    // Convert 'YYYY-MM-DD' → 'ddmmmyy' (e.g. '2026-03-27' → '27mar26')
+    const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+    const [year, month, day] = dateStr.split('-');
+    return `${day}${months[parseInt(month, 10) - 1]}${year.slice(2)}`;
+  }
+
   static getProjectReportPath(date, projectName) {
     const dir = this.getProjectDir(projectName);
     const dateStr = typeof date === 'string' ? date : this.formatDate(date);
-    return path.join(dir, `${dateStr}.md`);
+    return path.join(dir, `daily_updates_${this.formatDailyFilename(dateStr)}.md`);
   }
 
   static saveProjectReport(date, content, projectName) {
