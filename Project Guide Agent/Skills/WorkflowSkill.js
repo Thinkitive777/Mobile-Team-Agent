@@ -86,7 +86,7 @@ class WorkflowSkill extends BaseSkill {
             "assignee = currentUser() AND statusCategory != Done ORDER BY priority DESC, duedate ASC"
           );
           tickets = result.tickets;
-          totalTickets = result.total;
+          totalTickets = result.tickets.length + (!result.isLast ? 1 : 0);
         } catch (err) {
           jiraError = err.message;
         }

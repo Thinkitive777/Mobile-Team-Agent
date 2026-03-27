@@ -78,18 +78,22 @@ class SetupSkill extends BaseSkill {
   }
 
   async handleTool(name, args, context) {
-    const { config, preferences, saveConfig, savePreferences, getJiraClient, maskToken, getRepoPath } = context;
+    const { config, preferences, saveConfig, savePreferences, getJiraClient, maskToken, isTokenMasked, getRepoPath } = context;
 
     switch (name) {
       case "invoke_projectguide": {
-        const jiraOk = config.jira.connected || !!process.env.JIRA_URL;
+        const jiraCredOk = (config.jira.url && config.jira.email && config.jira.token && !isTokenMasked(config.jira.token));
+        const jiraOk = (config.jira.connected && jiraCredOk) || !!process.env.JIRA_URL;
         const githubOk = config.github.connected || !!process.env.GITHUB_TOKEN;
         const missing = [];
         if (!jiraOk) missing.push("Jira");
         if (!githubOk) missing.push("GitHub");
 
         let out = `Project Guide Agent v${CONST.VERSION} ACTIVATED.\n\n`;
-        if (missing.length > 0) {
+        if (!jiraOk && config.jira.connected && !jiraCredOk) {
+          out += `WARNING: Jira was previously configured but credentials appear corrupted or incomplete.\n`;
+          out += `Please run 'configure_service' with service='jira' to re-enter your credentials.\n\n`;
+        } else if (missing.length > 0) {
           out += `Setup required: ${missing.join(", ")}.\n`;
           out += `Use 'configure_service' or set environment variables.\n`;
         } else {
@@ -99,17 +103,31 @@ class SetupSkill extends BaseSkill {
       }
 
       case "get_setup_status": {
-        const jiraConnected = config.jira.connected || !!process.env.JIRA_URL;
+        const jiraToken = config.jira.token || process.env.JIRA_TOKEN;
+        const jiraEmail = config.jira.email || process.env.JIRA_EMAIL;
+        const jiraUrl = config.jira.url || process.env.JIRA_URL;
+        const jiraCredOk = !!(jiraUrl && jiraEmail && jiraToken && !isTokenMasked(jiraToken));
+        const jiraConnected = (config.jira.connected && jiraCredOk) || !!process.env.JIRA_URL;
         const githubConnected = config.github.connected || !!process.env.GITHUB_TOKEN;
 
         let out = `Project Guide Agent v${CONST.VERSION} — Setup Status\n\n`;
 
         out += `--- Connections ---\n`;
-        out += `Jira: ${jiraConnected ? 'Connected' : 'Not configured'}\n`;
         if (jiraConnected) {
-          out += `  URL: ${config.jira.url || process.env.JIRA_URL}\n`;
-          out += `  Email: ${config.jira.email || process.env.JIRA_EMAIL}\n`;
-          out += `  Token: ${maskToken(config.jira.token || process.env.JIRA_TOKEN)}\n`;
+          out += `Jira: Connected\n`;
+          out += `  URL: ${jiraUrl}\n`;
+          out += `  Email: ${jiraEmail}\n`;
+          out += `  Token: ${maskToken(jiraToken)}\n`;
+        } else if (config.jira.connected && !jiraCredOk) {
+          out += `Jira: CORRUPTED — credentials incomplete or token is masked\n`;
+          out += `  Action: run 'configure_service' with service='jira' to re-enter credentials\n`;
+          if (jiraUrl) out += `  URL (saved): ${jiraUrl}\n`;
+          if (jiraEmail) out += `  Email (saved): ${jiraEmail}\n`;
+          if (!jiraEmail) out += `  Email: MISSING\n`;
+          if (!jiraToken || isTokenMasked(jiraToken)) out += `  Token: MISSING or MASKED\n`;
+        } else {
+          out += `Jira: Not configured\n`;
+          out += `  Run 'configure_service' with service='jira' to connect.\n`;
         }
         out += `GitHub: ${githubConnected ? 'Connected' : 'Not configured'}\n`;
         if (githubConnected) {
@@ -161,8 +179,22 @@ class SetupSkill extends BaseSkill {
           const emailCheck = validate(emailSchema, email);
           if (!emailCheck.success) return this.errorResponse(`Email: ${emailCheck.error}`);
           if (!token) return this.errorResponse("Jira API token is required.");
+          if (isTokenMasked(token)) {
+            return this.errorResponse(
+              "The provided token looks like a masked placeholder (e.g. '********' or 'tok_****'). " +
+              "Please provide your real API token from: https://id.atlassian.com/manage-profile/security/api-tokens"
+            );
+          }
+          if (token.length < 20) {
+            return this.errorResponse(
+              "The provided token looks too short to be a valid Atlassian API token. " +
+              "Generate a fresh token at: https://id.atlassian.com/manage-profile/security/api-tokens"
+            );
+          }
 
-          config.jira = { connected: true, url, email, token };
+          // Normalize URL — strip trailing slash
+          const normalizedUrl = url.replace(/\/$/, '');
+          config.jira = { connected: true, url: normalizedUrl, email, token };
         } else if (service === "github") {
           if (!token) return this.errorResponse("GitHub token is required.");
           config.github = { connected: true, token, user: user || null, repo: repo || null };

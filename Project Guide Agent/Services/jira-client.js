@@ -168,24 +168,31 @@ class JiraClient {
     };
   }
 
-  async searchTickets(jql, fields = JIRA_DEFAULT_FIELDS, maxResults = JIRA_MAX_RESULTS, startAt = 0) {
-    Logger.debug('Jira search', { jql, maxResults, startAt });
-    const response = await this._fetchWithRetry(`${this.baseUrl}/rest/api/3/search`, {
+  // searchTickets uses the POST /rest/api/3/search/jql endpoint (cursor-based pagination).
+  // The legacy /rest/api/3/search was removed by Atlassian (410 Gone as of 2025).
+  // Pagination: pass nextPageToken from a previous response to get the next page.
+  async searchTickets(jql, fields = JIRA_DEFAULT_FIELDS, maxResults = JIRA_MAX_RESULTS, nextPageToken = null) {
+    Logger.debug('Jira search', { jql, maxResults, nextPageToken });
+    const body = { jql, fields, maxResults };
+    if (nextPageToken) body.nextPageToken = nextPageToken;
+
+    const response = await this._fetchWithRetry(`${this.baseUrl}/rest/api/3/search/jql`, {
       method: 'POST',
-      body: JSON.stringify({ jql, fields, maxResults, startAt }),
+      body: JSON.stringify(body),
     });
 
     const data = await response.json();
+    const tickets = (data.issues || []).map(issue => this._mapIssue(issue));
 
-    if (data.total > maxResults + startAt) {
-      Logger.warn('Jira results truncated', { total: data.total, fetched: data.issues.length });
+    if (!data.isLast) {
+      Logger.warn('Jira results truncated — more pages available', { fetched: tickets.length });
     }
 
     return {
-      tickets: (data.issues || []).map(issue => this._mapIssue(issue)),
-      total: data.total || 0,
-      startAt: data.startAt || 0,
-      maxResults: data.maxResults || maxResults,
+      tickets,
+      total: data.isLast ? tickets.length : tickets.length + 1, // no total in new API; +1 signals more exist
+      isLast: data.isLast !== false,
+      nextPageToken: data.nextPageToken || null,
     };
   }
 

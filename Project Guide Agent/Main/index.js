@@ -39,6 +39,27 @@ if (fs.existsSync(CONST.CONFIG_FILE)) {
   }
 }
 
+// Detect masked/placeholder token values that should never be stored
+function isTokenMasked(token) {
+  if (!token) return false;
+  return token === '********' || token === 'tok_****' || /^\*+$/.test(token) || token.startsWith('tok_****');
+}
+
+// On startup: if connected=true but credentials are missing or corrupted,
+// reset to disconnected so tools fail-fast with a clear message rather than
+// silently using bad credentials.
+(function validateConfigIntegrity() {
+  if (config.jira && config.jira.connected) {
+    const { url, email, token } = config.jira;
+    if (!url || !email || !token || isTokenMasked(token)) {
+      Logger.warn('Jira config integrity check failed — resetting connected=false', {
+        hasUrl: !!url, hasEmail: !!email, hasToken: !!token, tokenMasked: isTokenMasked(token)
+      });
+      config.jira.connected = false;
+    }
+  }
+})();
+
 function saveConfig() {
   try {
     fs.writeFileSync(CONST.CONFIG_FILE, JSON.stringify(config, null, 2), {
@@ -88,9 +109,17 @@ function getJiraClient() {
   const email = process.env.JIRA_EMAIL || config.jira.email;
   const token = process.env.JIRA_TOKEN || config.jira.token;
 
-  if (!url || !email || !token) {
+  if (isTokenMasked(token)) {
     throw new ConfigError(
-      "Jira not configured. Set JIRA_URL, JIRA_EMAIL, JIRA_TOKEN as env vars or use configure_service."
+      "Jira credentials are corrupted — the stored token is a masked placeholder. " +
+      "Please run 'configure_service' with service='jira' and provide your real API token."
+    );
+  }
+  if (!url || !email || !token) {
+    const missing = [!url && 'url', !email && 'email', !token && 'token'].filter(Boolean).join(', ');
+    throw new ConfigError(
+      `Jira not fully configured (missing: ${missing}). ` +
+      "Run 'configure_service' with service='jira', url, email, and token."
     );
   }
   return new JiraClient(url, email, token);
@@ -164,6 +193,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     getJiraClient,
     getRepoPath,
     maskToken,
+    isTokenMasked,
   };
 
   try {
@@ -172,8 +202,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     return errorResponse(`Tool execution returned null for ${name}`);
   } catch (error) {
     Logger.error("Tool execution failed", { tool: name, error: error.message, code: error.code });
+
+    let message = error.message;
+    let hint = '';
+
+    switch (error.code) {
+      case 'CONFIG_ERROR':
+        hint = "\n\nAction required: call 'configure_service' with service=\"jira\", your Jira URL, email, and API token to reconfigure.";
+        break;
+      case 'JIRA_AUTH_ERROR':
+        hint = "\n\nYour Jira credentials appear to be expired or incorrect.\nAction required: call 'configure_service' to update your API token.";
+        // Mark jira as disconnected so future calls fail fast
+        config.jira.connected = false;
+        break;
+      case 'JIRA_NETWORK_ERROR':
+        hint = "\n\nCould not reach Jira. Check your internet connection and try again, or call 'health_check' to diagnose.";
+        break;
+      case 'JIRA_RATE_LIMIT':
+        hint = "\n\nJira API rate limit exceeded. Wait a moment and retry.";
+        break;
+      case 'JIRA_CONNECTION_ERROR':
+        hint = "\n\nJira connection failed. Call 'health_check' to diagnose, or 'configure_service' to reconfigure.";
+        break;
+    }
+
     const prefix = error.code ? `[${error.code}] ` : '';
-    return errorResponse(`${prefix}${error.message}`);
+    return errorResponse(`${prefix}${message}${hint}`);
   }
 });
 

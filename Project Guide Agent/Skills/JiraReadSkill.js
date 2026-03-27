@@ -179,14 +179,11 @@ class JiraReadSkill extends BaseSkill {
               : "assignee = currentUser() ORDER BY updated DESC";
         }
 
-        const startAt = typeof args.start_at === 'number' ? args.start_at : 0;
-        const result = await client.searchTickets(jqlString, [...CONST.JIRA_DEFAULT_FIELDS, 'issuetype'], CONST.JIRA_MAX_RESULTS, startAt);
+        const result = await client.searchTickets(jqlString, [...CONST.JIRA_DEFAULT_FIELDS, 'issuetype'], CONST.JIRA_MAX_RESULTS, null);
         const tickets = result.tickets;
 
         let out = `Found ${tickets.length} ticket(s)`;
-        if (result.total > tickets.length) {
-          out += ` (showing ${tickets.length} of ${result.total})`;
-        }
+        if (!result.isLast) out += ` (more results available — use a narrower filter to see all)`;
         out += `\nQuery: ${jqlString}\n\n`;
 
         // Warn if results don't match the requested project
@@ -296,9 +293,7 @@ class JiraReadSkill extends BaseSkill {
 
         const fmt = (arr) => arr.length > 0 ? arr.map(t => `${t.key}: ${t.summary}`).join(", ") : "None";
 
-        let out = `Workload Analysis (${tickets.length} total`;
-        if (result.total > tickets.length) out += `, ${result.total} in Jira`;
-        out += `)\n\n`;
+        let out = `Workload Analysis (${tickets.length} shown${!result.isLast ? ', more available' : ''})\n\n`;
         out += `Done (${cat.done.length}): ${fmt(cat.done)}\n`;
         out += `In Progress (${cat.inProgress.length}): ${fmt(cat.inProgress)}\n`;
         out += `Not Started (${cat.notStarted.length}): ${fmt(cat.notStarted)}\n`;
@@ -510,6 +505,7 @@ class JiraReadSkill extends BaseSkill {
       case "list_tickets": {
         const client = getJiraClient();
         let jqlString = args.jql;
+        let resolvedProject = null; // hoisted so post-fetch validation can access it
 
         if (!jqlString) {
           const clauses = [];
@@ -517,7 +513,7 @@ class JiraReadSkill extends BaseSkill {
           if (assignee === 'me' || assignee === 'currentUser') clauses.push('assignee = currentUser()');
           else clauses.push(`assignee = "${assignee}"`);
 
-          let resolvedProject = args.project || preferences.last_project;
+          resolvedProject = args.project || preferences.last_project;
 
           // If the project value looks like a name/slug (contains dash or spaces, or is lowercase),
           // try to resolve it to a key via list_projects
@@ -562,8 +558,7 @@ class JiraReadSkill extends BaseSkill {
         }
 
         const maxResults = args.max_results || CONST.JIRA_MAX_RESULTS;
-        const startAt = typeof args.start_at === 'number' ? args.start_at : 0;
-        const result = await client.searchTickets(jqlString, [...CONST.JIRA_DEFAULT_FIELDS, 'issuetype'], maxResults, startAt);
+        const result = await client.searchTickets(jqlString, [...CONST.JIRA_DEFAULT_FIELDS, 'issuetype'], maxResults, null);
         const tickets = result.tickets;
 
         if (tickets.length === 0) return this.textResponse(`No tickets found.\nQuery: ${jqlString}`);
