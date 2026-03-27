@@ -111,6 +111,7 @@ class JiraReadSkill extends BaseSkill {
             status: { type: "string", description: "Comma-separated statuses" },
             priority: { type: "string", description: "Comma-separated priorities" },
             project: { type: "string", description: "Project key" },
+            component: { type: "string", description: "Filter by component name (e.g. iOS, Android)" },
             sprint: { type: "string", description: "Sprint name" },
             type: { type: "string", description: "Issue type filter" },
             updated_since: { type: "string", description: "Updated since" },
@@ -493,10 +494,34 @@ class JiraReadSkill extends BaseSkill {
           if (assignee === 'me' || assignee === 'currentUser') clauses.push('assignee = currentUser()');
           else clauses.push(`assignee = "${assignee}"`);
 
-          const project = args.project || preferences.last_project;
-          if (project) clauses.push(`project = "${project}"`);
+          let resolvedProject = args.project || preferences.last_project;
+
+          // If the project value looks like a name/slug (contains dash or spaces, or is lowercase),
+          // try to resolve it to a key via list_projects
+          if (resolvedProject && !/^[A-Z][A-Z0-9]+$/.test(resolvedProject)) {
+            try {
+              const projects = await client.getProjects();
+              const match = projects.find(p =>
+                p.name.toLowerCase().replace(/[\s-]/g, '') === resolvedProject.toLowerCase().replace(/[\s-]/g, '') ||
+                p.key.toLowerCase() === resolvedProject.toLowerCase()
+              );
+              if (match) {
+                resolvedProject = match.key;
+              } else {
+                return this.errorResponse(
+                  `Could not find a project matching "${resolvedProject}".\n` +
+                  `Available projects: ${projects.map(p => `${p.key} (${p.name})`).join(', ')}`
+                );
+              }
+            } catch (e) {
+              // Proceed with the original value — better than blocking
+            }
+          }
+
+          if (resolvedProject) clauses.push(`project = "${resolvedProject}"`);
           if (args.sprint) clauses.push(`sprint = "${args.sprint}"`);
-          
+          if (args.component) clauses.push(`component = "${args.component}"`);
+
           if (args.status) {
             const statuses = args.status.split(",").map(s => `"${s.trim()}"`).join(",");
             clauses.push(`status in (${statuses})`);
@@ -531,6 +556,7 @@ class JiraReadSkill extends BaseSkill {
         }
 
         out += `\nShowing ${tickets.length} ticket(s).\n`;
+        out += `\nQuery: ${jqlString}\n`;
         return this.textResponse(out);
       }
 
