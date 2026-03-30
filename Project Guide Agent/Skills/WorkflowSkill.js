@@ -313,12 +313,10 @@ class WorkflowSkill extends BaseSkill {
         if (unlinkedCommits.length > 0 && allProjects.length === 0) allProjects.push('General');
         if (unlinkedCommits.length > 0 && !allProjects.includes('General')) allProjects.push('General');
 
-        // Determine project display name
+        // Determine project display name from root folder name
+        const rootFolderName = path.basename(getRepoPath());
         const activeProjectKey = args.project_name
-          || (config && config.jira && config.jira.active_project && config.jira.active_project !== '__default__'
-              ? config.jira.active_project
-              : null)
-          || preferences.last_project
+          || rootFolderName
           || null;
 
         // Format date parts
@@ -370,9 +368,7 @@ class WorkflowSkill extends BaseSkill {
           const projPending = pendingByProject[proj] || [];
           const projCommits = proj === 'General' ? unlinkedCommits : (commitsByProject[proj] || []);
 
-          const projDisplayName = (activeProjectKey && proj !== 'General' && proj === activeProjectKey.split('-')[0])
-            ? activeProjectKey
-            : proj;
+          const projDisplayName = activeProjectKey || proj;
 
           // Header
           content += `# ProjectName: ${projDisplayName} Updates\n`;
