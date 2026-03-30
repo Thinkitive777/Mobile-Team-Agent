@@ -114,26 +114,69 @@ mkdir -p "$INSTALL_DIR/src"
 mkdir -p "$INSTALL_DIR/daily-reports"
 
 # ----------------------------------------------------------
-# Step 4: Install — Binary or Node.js source fallback
+# Step 4: Install source files (always) and optional binary
 # ----------------------------------------------------------
+# MCP registration always uses Node.js source (not binary) to
+# guarantee the server stays in sync with the latest code.
+# Binary is still installed for optional CLI/PATH usage.
 INSTALL_MODE=""
 
-if [ -f "$SOURCE_BINARY" ]; then
-    # Try binary installation
+# 4a. Always install source if available (required for MCP)
+if [ -f "$SCRIPT_DIR/Main/index.js" ]; then
+    if command -v node &> /dev/null; then
+        NODE_VERSION=$(node -v | sed 's/v//' | cut -d. -f1)
+        if [ "$NODE_VERSION" -ge 18 ] 2>/dev/null; then
+            info "Installing source files..."
+
+            # Copy source files
+            cp -R "$SCRIPT_DIR/Constants" "$INSTALL_DIR/src/"
+            cp -R "$SCRIPT_DIR/Main" "$INSTALL_DIR/src/"
+            cp -R "$SCRIPT_DIR/Scripts" "$INSTALL_DIR/src/"
+            cp -R "$SCRIPT_DIR/Skills" "$INSTALL_DIR/src/"
+            cp -R "$SCRIPT_DIR/Utils" "$INSTALL_DIR/src/"
+            cp -R "$SCRIPT_DIR/Services" "$INSTALL_DIR/src/"
+            if [ -f "$SCRIPT_DIR/package.json" ]; then
+                cp "$SCRIPT_DIR/package.json" "$INSTALL_DIR/src/"
+            fi
+
+            # Copy .env.example
+            if [ -f "$SCRIPT_DIR/.env.example" ]; then
+                cp "$SCRIPT_DIR/.env.example" "$INSTALL_DIR/src/.env.example"
+            fi
+
+            # Install dependencies
+            info "Installing Node.js dependencies..."
+            cd "$INSTALL_DIR/src"
+            npm install --production --silent 2>/dev/null
+            cd "$SCRIPT_DIR"
+
+            # Create a runner script that uses Node.js source
+            cat > "$BIN_DIR/$BINARY_NAME" << 'RUNNER'
+#!/bin/bash
+AGENT_DIR="$HOME/.projectguide-agent/src"
+exec node "$AGENT_DIR/Main/index.js" "$@"
+RUNNER
+            chmod +x "$BIN_DIR/$BINARY_NAME"
+            INSTALL_MODE="source"
+            success "Source installed to $INSTALL_DIR/src/ (Node.js mode)"
+        else
+            fail "Node.js 18+ required but found v$NODE_VERSION"
+        fi
+    fi
+fi
+
+# 4b. Fallback to binary if source install failed (no Node.js 18+)
+if [ -z "$INSTALL_MODE" ] && [ -f "$SOURCE_BINARY" ]; then
+    info "Node.js 18+ not available. Trying pre-built binary..."
     cp "$SOURCE_BINARY" "$BIN_DIR/$BINARY_NAME"
     chmod +x "$BIN_DIR/$BINARY_NAME"
 
     # Verify the binary actually responds to MCP protocol
-    # Send an MCP initialize request and check for a JSON response
     BINARY_OK=false
-    VERIFY_OUTPUT=""
-
-    # Test with MCP protocol handshake (binary starts an MCP server on stdio)
     VERIFY_OUTPUT=$(echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"verify","version":"1.0"}},"id":1}' | {
         if command -v timeout &> /dev/null; then
             timeout 10 "$BIN_DIR/$BINARY_NAME" 2>/dev/null
         else
-            # macOS may not have timeout — use a subshell with background kill
             "$BIN_DIR/$BINARY_NAME" 2>/dev/null &
             VPID=$!
             sleep 5
@@ -150,67 +193,18 @@ if [ -f "$SOURCE_BINARY" ]; then
         INSTALL_MODE="binary"
         success "Binary installed and verified at $BIN_DIR/$BINARY_NAME"
     else
-        warn "Binary does not respond to MCP protocol. Will try source fallback."
+        warn "Binary does not respond to MCP protocol."
         rm -f "$BIN_DIR/$BINARY_NAME"
     fi
 fi
 
-# Fallback to Node.js source if binary not available or failed
 if [ -z "$INSTALL_MODE" ]; then
-    if [ -f "$SCRIPT_DIR/Main/index.js" ]; then
-        if command -v node &> /dev/null; then
-            NODE_VERSION=$(node -v | sed 's/v//' | cut -d. -f1)
-            if [ "$NODE_VERSION" -ge 18 ] 2>/dev/null; then
-                info "Installing from source (Node.js mode)..."
-
-                # Copy source files
-                cp -R "$SCRIPT_DIR/Constants" "$INSTALL_DIR/src/"
-                cp -R "$SCRIPT_DIR/Main" "$INSTALL_DIR/src/"
-                cp -R "$SCRIPT_DIR/Scripts" "$INSTALL_DIR/src/"
-                cp -R "$SCRIPT_DIR/Skills" "$INSTALL_DIR/src/"
-                cp -R "$SCRIPT_DIR/Utils" "$INSTALL_DIR/src/"
-                cp -R "$SCRIPT_DIR/Services" "$INSTALL_DIR/src/"
-                if [ -f "$SCRIPT_DIR/package.json" ]; then
-                    cp "$SCRIPT_DIR/package.json" "$INSTALL_DIR/src/"
-                fi
-
-                # Copy .env.example
-                if [ -f "$SCRIPT_DIR/.env.example" ]; then
-                    cp "$SCRIPT_DIR/.env.example" "$INSTALL_DIR/src/.env.example"
-                fi
-
-                # Install dependencies
-                info "Installing Node.js dependencies..."
-                cd "$INSTALL_DIR/src"
-                npm install --production --silent 2>/dev/null
-                cd "$SCRIPT_DIR"
-
-                # Create a runner script instead of binary
-                cat > "$BIN_DIR/$BINARY_NAME" << 'RUNNER'
-#!/bin/bash
-AGENT_DIR="$HOME/.projectguide-agent/src"
-exec node "$AGENT_DIR/Main/index.js" "$@"
-RUNNER
-                chmod +x "$BIN_DIR/$BINARY_NAME"
-                INSTALL_MODE="source"
-                success "Source installed to $INSTALL_DIR/src/ (Node.js mode)"
-            else
-                fail "Node.js 18+ required but found v$NODE_VERSION"
-                fail "No binary available for your platform either."
-                exit 1
-            fi
-        else
-            fail "No binary found for your platform and Node.js is not installed."
-            echo ""
-            echo "  Options:"
-            echo "    1. Install Node.js 18+: https://nodejs.org"
-            echo "    2. Build binaries: cd 'Project Guide Agent' && npm run build"
-            exit 1
-        fi
-    else
-        fail "No binary or source files found. Archive may be incomplete."
-        exit 1
-    fi
+    fail "No binary or source files found, or prerequisites not met."
+    echo ""
+    echo "  Options:"
+    echo "    1. Install Node.js 18+: https://nodejs.org"
+    echo "    2. Build binaries: cd 'Project Guide Agent' && npm run build"
+    exit 1
 fi
 
 # Copy invoke wrapper
@@ -231,10 +225,23 @@ claude mcp remove projectguide-agent > /dev/null 2>&1 || true
 
 # Register at USER scope — this makes it available in ALL directories
 # The config is written to ~/.claude.json under mcpServers
-if claude mcp add projectguide-agent -s user -- "$BIN_DIR/$BINARY_NAME" 2>&1; then
-    success "MCP server registered globally (user scope)"
+# For source installs, register with 'node' directly to avoid stale binary issues
+if [ "$INSTALL_MODE" = "source" ]; then
+    MCP_CMD="node"
+    MCP_ARGS="$INSTALL_DIR/src/Main/index.js"
+    if claude mcp add projectguide-agent -s user -- $MCP_CMD "$MCP_ARGS" 2>&1; then
+        success "MCP server registered globally (user scope, node source)"
+    else
+        warn "claude mcp add command failed. Attempting direct config write..."
+    fi
 else
-    warn "claude mcp add command failed. Attempting direct config write..."
+    MCP_CMD="$BIN_DIR/$BINARY_NAME"
+    MCP_ARGS=""
+    if claude mcp add projectguide-agent -s user -- "$MCP_CMD" 2>&1; then
+        success "MCP server registered globally (user scope, binary)"
+    else
+        warn "claude mcp add command failed. Attempting direct config write..."
+    fi
 fi
 
 # Verify registration by checking ~/.claude.json
@@ -248,6 +255,15 @@ fi
 # Fallback: write directly to ~/.claude.json if CLI registration failed
 if [ "$MCP_REGISTERED" = false ]; then
     warn "MCP registration not found in $CLAUDE_JSON. Writing config directly..."
+    # Determine command and args for direct config write
+    if [ "$INSTALL_MODE" = "source" ]; then
+        DIRECT_CMD="node"
+        DIRECT_ARGS="[\"$INSTALL_DIR/src/Main/index.js\"]"
+    else
+        DIRECT_CMD="$BIN_DIR/$BINARY_NAME"
+        DIRECT_ARGS="[]"
+    fi
+
     if [ -f "$CLAUDE_JSON" ]; then
         # File exists — inject mcpServers entry using python/node
         if command -v python3 &> /dev/null; then
@@ -262,8 +278,8 @@ if 'mcpServers' not in config:
     config['mcpServers'] = {}
 config['mcpServers']['projectguide-agent'] = {
     'type': 'stdio',
-    'command': '$BIN_DIR/$BINARY_NAME',
-    'args': [],
+    'command': '$DIRECT_CMD',
+    'args': json.loads('$DIRECT_ARGS'),
     'env': {}
 }
 with open('$CLAUDE_JSON', 'w') as f:
@@ -278,8 +294,8 @@ try { config = JSON.parse(fs.readFileSync('$CLAUDE_JSON', 'utf8')); } catch {}
 if (!config.mcpServers) config.mcpServers = {};
 config.mcpServers['projectguide-agent'] = {
     type: 'stdio',
-    command: '$BIN_DIR/$BINARY_NAME',
-    args: [],
+    command: '$DIRECT_CMD',
+    args: JSON.parse('$DIRECT_ARGS'),
     env: {}
 };
 fs.writeFileSync('$CLAUDE_JSON', JSON.stringify(config, null, 2));
@@ -288,7 +304,21 @@ console.log('OK');
         fi
     else
         # No claude.json exists — create minimal one
-        cat > "$CLAUDE_JSON" << MCPEOF
+        if [ "$INSTALL_MODE" = "source" ]; then
+            cat > "$CLAUDE_JSON" << MCPEOF
+{
+  "mcpServers": {
+    "projectguide-agent": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["$INSTALL_DIR/src/Main/index.js"],
+      "env": {}
+    }
+  }
+}
+MCPEOF
+        else
+            cat > "$CLAUDE_JSON" << MCPEOF
 {
   "mcpServers": {
     "projectguide-agent": {
@@ -300,6 +330,7 @@ console.log('OK');
   }
 }
 MCPEOF
+        fi
         MCP_REGISTERED=true
     fi
 
@@ -309,7 +340,11 @@ MCPEOF
         fail "Could not register MCP server automatically."
         echo ""
         echo "  Please register manually by running:"
-        echo "    claude mcp add projectguide-agent -s user -- $BIN_DIR/$BINARY_NAME"
+        if [ "$INSTALL_MODE" = "source" ]; then
+            echo "    claude mcp add projectguide-agent -s user -- node $INSTALL_DIR/src/Main/index.js"
+        else
+            echo "    claude mcp add projectguide-agent -s user -- $BIN_DIR/$BINARY_NAME"
+        fi
         echo ""
     fi
 fi
