@@ -222,6 +222,51 @@ Categorizes all your tickets: Done, In Progress, Not Started, Blocked, Overdue �
 
 ---
 
+### Throughout the Day: Memory & Journal
+
+The agent has **persistent memory** that survives across sessions. Use it to save notes, log progress, and record decisions — so you never lose context.
+
+**Save a note about a ticket:**
+```
+Remember that PROJ-123 needs the backend deploy before we can test
+Note: the auth refactor depends on PROJ-456 being merged first
+```
+
+The agent auto-detects ticket keys in your text and links them. Next time you open PROJ-123 (via `select_ticket`), your notes appear automatically.
+
+**Log what you're doing (work journal):**
+```
+I just finished the login API refactor
+Switching to PROJ-789 now
+Started code review for PR #45
+```
+
+Unlike EOD reports (which are end-of-day snapshots), journal entries are **real-time**. They're timestamped and auto-linked to any mentioned tickets. Journal entries also feed into your EOD report automatically.
+
+**Record decisions:**
+```
+We decided to use Redis instead of Memcached for session storage
+The plan is to deprecate the old auth endpoint after sprint 12
+```
+
+Decisions stay active until you resolve them. They surface in your `plan_my_day` output so you don't forget.
+
+**Recall past context:**
+```
+What did I note about PROJ-123?
+Remind me about the Redis decision
+Show my journal
+What decisions are pending?
+```
+
+**Why this matters:**
+- Monday morning: "Plan my day" shows your notes on in-progress tickets — you remember exactly where you left off
+- Ticket deep-dive: `PROJ-123` automatically shows your saved notes alongside Jira data
+- EOD reports: journal entries are included automatically — no need to remember what you did
+- Cross-session: decisions and notes persist forever until you clear them
+
+---
+
 ### End of Day: Wrap Up
 
 Say any of these:
@@ -310,7 +355,41 @@ Aggregates all your daily reports from the last 7 days:
 
 ---
 
-## Command Reference
+## Slash Commands
+
+Type these directly in Claude Code for instant access — no natural language needed:
+
+| Command | What it does |
+|---------|-------------|
+| `/plan` | Deep daily plan — tickets, code changes, blockers, memory, action plan |
+| `/standup` | Quick morning standup overview |
+| `/eod` | Generate & save end-of-day report |
+| `/eod design review 2h, team sync` | EOD report with non-ticket work included |
+| `/tickets` | Show all your open tickets |
+| `/tickets CMDN` | Show tickets for a specific project |
+| `/tickets bugs` | Show your bugs |
+| `/ticket PROJ-123` | Deep dive into a specific ticket |
+| `/workload` | Categorized breakdown: done, in progress, blocked, overdue |
+| `/suggest` | AI-scored "what should I work on next?" |
+| `/commits` | Recent commits with file diffs and work area analysis |
+| `/commits 7 days ago` | Commits for a custom time period |
+| `/remember PROJ-123 needs backend deploy first` | Save a note to memory |
+| `/recall PROJ-123` | Recall all notes for a ticket |
+| `/recall Redis` | Search memory by keyword |
+| `/journal finished the login API refactor` | Log real-time work progress |
+| `/journal` | Show today's journal (no args) |
+| `/decide use Redis instead of Memcached` | Record a decision |
+| `/decisions` | Show active decisions |
+| `/weekly` | Weekly summary from last 7 daily reports |
+| `/health` | Test Jira, Git, and report storage |
+| `/status` | Show connection status and preferences |
+| `/memory` | Memory usage stats |
+
+---
+
+## Natural Language Commands (also works)
+
+You can also use natural language — the agent understands intent:
 
 ### Everyday Commands
 
@@ -324,6 +403,22 @@ Aggregates all your daily reports from the last 7 days:
 | `Show me my tickets` | List all your open tickets |
 | `What's my workload?` | Categorized breakdown (done, in progress, blocked, overdue) |
 | `Weekly summary` | Aggregate last 7 daily reports |
+
+### Memory & Journal
+
+| What to say | What it does |
+|-------------|--------------|
+| `Remember that PROJ-123 needs X` | Save a note linked to a ticket |
+| `Note: the auth refactor depends on PROJ-456` | Save a context note (auto-links ticket) |
+| `I just finished the login refactor` | Journal entry — real-time work log |
+| `Switching to PROJ-789 now` | Journal entry with auto ticket linking |
+| `We decided to use Redis for sessions` | Record a persistent decision |
+| `What did I note about PROJ-123?` | Recall memory for a ticket |
+| `Remind me about the Redis decision` | Search memory by keyword |
+| `Show my journal` | Today's journal entries |
+| `What decisions are pending?` | Active (unresolved) decisions |
+| `Forget about PROJ-123` | Clear all notes for a ticket |
+| `Memory status` | How much is stored |
 
 ### Code & Git Commands
 
@@ -541,23 +636,26 @@ All reports are stored in `~/.projectguide-agent/daily-reports/`. You can read t
 
 ## How It Works (for the curious)
 
-The agent runs as an MCP (Model Context Protocol) server that Claude Code communicates with. It's registered globally, so it works from any directory.
+The agent runs as an MCP (Model Context Protocol) server that Claude Code communicates with. It's registered at the **project level** via `.mcp.json`, so it activates only when you run `claude` from this project directory.
 
+- **Project-scoped MCP** — the agent registers via `.mcp.json` in the project root, not globally. It only activates when you run `claude` from this project directory. To use it in another project, copy the `.mcp.json` file there.
 - **No data leaves your machine** beyond Jira API calls (which use your own credentials)
 - **Git analysis is local** — diffs are computed locally via `git diff-tree` and `git show`, nothing is sent anywhere
 - **Preferences** are stored in `~/.projectguide-agent/preferences.json`
 - **Credentials** are stored in `~/.projectguide-agent/config.json` (file permissions: 600)
 - **Reports** are plain markdown in `~/.projectguide-agent/daily-reports/`
+- **Memory** is stored in `~/.projectguide-agent/memory/` — ticket notes, journal, decisions (all JSON)
 - **Offline resilience** — if Jira goes down, write actions are queued and can be synced later
 
 ### Architecture (for contributors)
 
 ```
 Skills/
-  WorkflowSkill.js   — morning_standup, plan_my_day, end_of_day_report (uses Git diff analysis)
-  JiraReadSkill.js    — ticket queries, workload analysis, suggestions
+  WorkflowSkill.js   — morning_standup, plan_my_day, end_of_day_report (uses Git + memory)
+  JiraReadSkill.js    — ticket queries, workload analysis, suggestions (surfaces memory on select)
   JiraWriteSkill.js   — transitions, comments, assignments, ticket creation
   GitSkill.js         — get_recent_commits (with diffs), get_commit_details (full patch)
+  MemorySkill.js      — remember, recall, journal, decisions (10 tools)
   SetupSkill.js       — connection management, health checks, preferences
 
 Utils/
@@ -566,6 +664,7 @@ Utils/
 Services/
   jira-client.js      — Jira REST API with retry, rate-limit, auth handling
   report-manager.js   — daily/weekly report persistence and aggregation
+  memory-manager.js   — ticket notes, journal, decisions, search (persistent JSON storage)
 ```
 
 ---

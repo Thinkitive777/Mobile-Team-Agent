@@ -124,6 +124,8 @@ class LegacySkill extends BaseSkill {
           'workload': 'analyze_workload', 'analyze-workload': 'analyze_workload',
           'standup': 'morning_standup', 'morning': 'morning_standup',
           'plan-my-day': 'plan_my_day', 'plan-day': 'plan_my_day', 'daily-plan': 'plan_my_day',
+          'remember': 'remember', 'recall': 'recall', 'memory': 'memory_status',
+          'journal': 'journal', 'show-journal': 'show_journal', 'decisions': 'show_decisions',
           'eod': 'end_of_day_report',
           'health': 'health_check', 'health-check': 'health_check',
           'suggestions': 'get_ticket_suggestions', 'suggest': 'get_ticket_suggestions',

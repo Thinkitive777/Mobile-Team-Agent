@@ -17,8 +17,13 @@ if [ -z "$INSTALLER" ]; then
     # Agent was installed — run uninstall from installed location
     echo "Uninstall script not found in package. Performing manual cleanup..."
     claude mcp remove projectguide-agent -s user 2>/dev/null || true
+    claude mcp remove projectguide-agent -s project 2>/dev/null || true
     rm -rf "$HOME/.projectguide-agent"
-    echo "Done. You may need to manually clean ~/.claude/CLAUDE.md"
+    # Remove .mcp.json entry if present
+    if [ -f "$SCRIPT_DIR/.mcp.json" ]; then
+        rm -f "$SCRIPT_DIR/.mcp.json"
+    fi
+    echo "Done."
     exit 0
 fi
 

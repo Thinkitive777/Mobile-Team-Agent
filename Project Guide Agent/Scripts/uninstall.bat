@@ -4,7 +4,9 @@ setlocal EnableDelayedExpansion
 :: Project Guide Agent — Uninstaller (Windows)
 
 set "INSTALL_DIR=%USERPROFILE%\.projectguide-agent"
-set "CLAUDE_GLOBAL_MD=%USERPROFILE%\.claude\CLAUDE.md"
+set "SCRIPT_DIR=%~dp0"
+for %%I in ("%SCRIPT_DIR%..\..") do set "PROJECT_ROOT=%%~fI"
+set "MCP_JSON=%PROJECT_ROOT%\.mcp.json"
 
 echo.
 echo Project Guide Agent — Uninstaller
@@ -18,20 +20,38 @@ if /i not "%CONFIRM%"=="y" (
     exit /b 0
 )
 
-:: Remove MCP registration
-echo Removing MCP registration...
+:: Remove any MCP registrations (global cleanup from old installs)
+echo Removing MCP registrations...
 claude mcp remove projectguide-agent -s user >nul 2>&1
 claude mcp remove projectguide-agent -s project >nul 2>&1
 claude mcp remove projectguide-agent >nul 2>&1
-echo [OK] MCP registration removed.
+echo [OK] MCP registrations removed.
 
-:: Remove CLAUDE.md block
+:: Clean project-level .mcp.json
+if exist "%MCP_JSON%" (
+    echo Cleaning .mcp.json at %MCP_JSON%...
+    powershell -Command ^
+        "$p = '%MCP_JSON%'; " ^
+        "$c = Get-Content $p -Raw | ConvertFrom-Json; " ^
+        "if ($c.mcpServers.PSObject.Properties['projectguide-agent']) { " ^
+        "  $c.mcpServers.PSObject.Properties.Remove('projectguide-agent'); " ^
+        "  if (($c.mcpServers.PSObject.Properties | Measure-Object).Count -eq 0) { " ^
+        "    Remove-Item $p " ^
+        "  } else { " ^
+        "    $c | ConvertTo-Json -Depth 10 | Set-Content $p " ^
+        "  } " ^
+        "}"
+    echo [OK] Project .mcp.json cleaned.
+)
+
+:: Clean old global CLAUDE.md if it has our block
+set "CLAUDE_GLOBAL_MD=%USERPROFILE%\.claude\CLAUDE.md"
 if exist "%CLAUDE_GLOBAL_MD%" (
     findstr /C:"Project Guide Agent Instructions" "%CLAUDE_GLOBAL_MD%" >nul 2>&1
     if !ERRORLEVEL! equ 0 (
-        echo Removing agent instructions from global CLAUDE.md...
+        echo Removing old agent instructions from global CLAUDE.md...
         powershell -Command "(Get-Content '%CLAUDE_GLOBAL_MD%' -Raw) -replace '(?s)# --- Project Guide Agent Instructions ---.*?# --- End Project Guide Agent Instructions ---', '' | Set-Content '%CLAUDE_GLOBAL_MD%'"
-        echo [OK] Agent instructions removed.
+        echo [OK] Old global instructions removed.
     )
 )
 

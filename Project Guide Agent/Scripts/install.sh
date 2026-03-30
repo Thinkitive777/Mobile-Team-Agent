@@ -1,15 +1,15 @@
 #!/bin/bash
 
 # ============================================================
-# Project Guide Agent — Global Installer (Mac / Linux)
+# Project Guide Agent — Project-Level Installer (Mac / Linux)
 #
 # Usage: chmod +x install.sh && ./install.sh
 #
 # What this does:
-#   1. Installs the agent binary to ~/.projectguide-agent/
-#   2. Registers the MCP server GLOBALLY with Claude CLI
-#   3. Installs CLAUDE.md to ~/.claude/ for global recognition
-#   4. Any folder on this machine will recognize the agent
+#   1. Installs the agent source/binary to ~/.projectguide-agent/
+#   2. Creates a project-level .mcp.json in the project root
+#   3. MCP is scoped to this project only (not global)
+#   4. Agent is available when you run `claude` from this project
 # ============================================================
 
 # Don't use set -e — we handle errors explicitly to avoid silent failures
@@ -19,9 +19,8 @@ INSTALL_DIR="$HOME/.projectguide-agent"
 BIN_DIR="$INSTALL_DIR/bin"
 BINARY_NAME="projectguide-agent"
 CLAUDE_GLOBAL_DIR="$HOME/.claude"
-CLAUDE_JSON="$HOME/.claude.json"
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="2.1.0"
+VERSION="3.3.0"
 
 # Colors
 RED='\033[0;31m'
@@ -220,41 +219,52 @@ if [ -f "$SCRIPT_DIR/Scripts/invoke" ]; then
 fi
 
 # ----------------------------------------------------------
-# Step 5: Register MCP server GLOBALLY with Claude CLI
+# Step 5: Create project-level .mcp.json
 # ----------------------------------------------------------
-info "Registering MCP server globally..."
+info "Setting up project-level MCP configuration..."
 
-# Remove any existing registration (all scopes)
+# Remove any old global registration (cleanup from previous installs)
 claude mcp remove projectguide-agent -s user > /dev/null 2>&1 || true
-claude mcp remove projectguide-agent -s project > /dev/null 2>&1 || true
 claude mcp remove projectguide-agent > /dev/null 2>&1 || true
 
-# Register at USER scope — this makes it available in ALL directories
-# The config is written to ~/.claude.json under mcpServers
-if claude mcp add projectguide-agent -s user -- "$BIN_DIR/$BINARY_NAME" 2>&1; then
-    success "MCP server registered globally (user scope)"
+# Determine project root (where the user ran the installer from)
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+MCP_JSON="$PROJECT_ROOT/.mcp.json"
+
+# Build the MCP server entry
+if [ "$INSTALL_MODE" = "binary" ]; then
+    MCP_COMMAND="$BIN_DIR/$BINARY_NAME"
+    MCP_ARGS="[]"
 else
-    warn "claude mcp add command failed. Attempting direct config write..."
+    MCP_COMMAND="node"
+    MCP_ARGS='["'"$INSTALL_DIR/src/Main/index.js"'"]'
 fi
 
-# Verify registration by checking ~/.claude.json
+# Write or update .mcp.json in the project root
 MCP_REGISTERED=false
-if [ -f "$CLAUDE_JSON" ]; then
-    if grep -q "projectguide-agent" "$CLAUDE_JSON" 2>/dev/null; then
-        MCP_REGISTERED=true
-    fi
-fi
 
-# Fallback: write directly to ~/.claude.json if CLI registration failed
-if [ "$MCP_REGISTERED" = false ]; then
-    warn "MCP registration not found in $CLAUDE_JSON. Writing config directly..."
-    if [ -f "$CLAUDE_JSON" ]; then
-        # File exists — inject mcpServers entry using python/node
-        if command -v python3 &> /dev/null; then
-            python3 -c "
-import json, sys
+if command -v node &> /dev/null; then
+    node -e "
+const fs = require('fs');
+const mcpPath = '$MCP_JSON';
+let config = {};
+try { config = JSON.parse(fs.readFileSync(mcpPath, 'utf8')); } catch {}
+if (!config.mcpServers) config.mcpServers = {};
+config.mcpServers['projectguide-agent'] = {
+    type: 'stdio',
+    command: '$MCP_COMMAND',
+    args: $MCP_ARGS,
+    env: {}
+};
+fs.writeFileSync(mcpPath, JSON.stringify(config, null, 2) + '\n');
+console.log('OK');
+" && MCP_REGISTERED=true
+elif command -v python3 &> /dev/null; then
+    python3 -c "
+import json
+mcp_path = '$MCP_JSON'
 try:
-    with open('$CLAUDE_JSON', 'r') as f:
+    with open(mcp_path, 'r') as f:
         config = json.load(f)
 except:
     config = {}
@@ -262,64 +272,48 @@ if 'mcpServers' not in config:
     config['mcpServers'] = {}
 config['mcpServers']['projectguide-agent'] = {
     'type': 'stdio',
-    'command': '$BIN_DIR/$BINARY_NAME',
-    'args': [],
+    'command': '$MCP_COMMAND',
+    'args': $MCP_ARGS,
     'env': {}
 }
-with open('$CLAUDE_JSON', 'w') as f:
+with open(mcp_path, 'w') as f:
     json.dump(config, f, indent=2)
+    f.write('\n')
 print('OK')
 " && MCP_REGISTERED=true
-        elif command -v node &> /dev/null; then
-            node -e "
-const fs = require('fs');
-let config = {};
-try { config = JSON.parse(fs.readFileSync('$CLAUDE_JSON', 'utf8')); } catch {}
-if (!config.mcpServers) config.mcpServers = {};
-config.mcpServers['projectguide-agent'] = {
-    type: 'stdio',
-    command: '$BIN_DIR/$BINARY_NAME',
-    args: [],
-    env: {}
-};
-fs.writeFileSync('$CLAUDE_JSON', JSON.stringify(config, null, 2));
-console.log('OK');
-" && MCP_REGISTERED=true
-        fi
-    else
-        # No claude.json exists — create minimal one
-        cat > "$CLAUDE_JSON" << MCPEOF
+fi
+
+if [ "$MCP_REGISTERED" = true ]; then
+    success "Project-level .mcp.json created at $MCP_JSON"
+else
+    # Fallback: write manually
+    cat > "$MCP_JSON" << MCPEOF
 {
   "mcpServers": {
     "projectguide-agent": {
       "type": "stdio",
-      "command": "$BIN_DIR/$BINARY_NAME",
-      "args": [],
+      "command": "$MCP_COMMAND",
+      "args": $MCP_ARGS,
       "env": {}
     }
   }
 }
 MCPEOF
+    if [ -f "$MCP_JSON" ]; then
+        success "Project-level .mcp.json created at $MCP_JSON (manual fallback)"
         MCP_REGISTERED=true
-    fi
-
-    if [ "$MCP_REGISTERED" = true ]; then
-        success "MCP config written directly to $CLAUDE_JSON"
     else
-        fail "Could not register MCP server automatically."
+        fail "Could not create .mcp.json."
         echo ""
-        echo "  Please register manually by running:"
-        echo "    claude mcp add projectguide-agent -s user -- $BIN_DIR/$BINARY_NAME"
+        echo "  Create it manually at: $MCP_JSON"
         echo ""
     fi
 fi
 
 # ----------------------------------------------------------
-# Step 6: Install CLAUDE.md globally
+# Step 6: Ensure CLAUDE.md is in the project root
 # ----------------------------------------------------------
-info "Setting up global agent instructions..."
-
-mkdir -p "$CLAUDE_GLOBAL_DIR"
+info "Checking project CLAUDE.md..."
 
 CLAUDE_MD_SOURCE=""
 if [ -f "$SCRIPT_DIR/../CLAUDE.md" ]; then
@@ -328,36 +322,15 @@ elif [ -f "$SCRIPT_DIR/CLAUDE.md" ]; then
     CLAUDE_MD_SOURCE="$SCRIPT_DIR/CLAUDE.md"
 fi
 
-if [ -n "$CLAUDE_MD_SOURCE" ]; then
-    GLOBAL_CLAUDE_MD="$CLAUDE_GLOBAL_DIR/CLAUDE.md"
-    MARKER="# --- Project Guide Agent Instructions ---"
-    MARKER_END="# --- End Project Guide Agent Instructions ---"
+PROJECT_CLAUDE_MD="$PROJECT_ROOT/CLAUDE.md"
 
-    if [ -f "$GLOBAL_CLAUDE_MD" ]; then
-        # Check if our instructions are already there
-        if grep -q "$MARKER" "$GLOBAL_CLAUDE_MD" 2>/dev/null; then
-            # Replace existing block
-            # Remove old block and append new one
-            sed "/$MARKER/,/$MARKER_END/d" "$GLOBAL_CLAUDE_MD" > "$GLOBAL_CLAUDE_MD.tmp"
-            mv "$GLOBAL_CLAUDE_MD.tmp" "$GLOBAL_CLAUDE_MD"
-            info "Updating existing agent instructions in global CLAUDE.md..."
-        else
-            info "Appending agent instructions to existing global CLAUDE.md..."
-        fi
-        # Append our block
-        echo "" >> "$GLOBAL_CLAUDE_MD"
-        echo "$MARKER" >> "$GLOBAL_CLAUDE_MD"
-        cat "$CLAUDE_MD_SOURCE" >> "$GLOBAL_CLAUDE_MD"
-        echo "" >> "$GLOBAL_CLAUDE_MD"
-        echo "$MARKER_END" >> "$GLOBAL_CLAUDE_MD"
+if [ -n "$CLAUDE_MD_SOURCE" ]; then
+    if [ -f "$PROJECT_CLAUDE_MD" ]; then
+        success "CLAUDE.md already exists at $PROJECT_CLAUDE_MD"
     else
-        # Create new file with our instructions
-        echo "$MARKER" > "$GLOBAL_CLAUDE_MD"
-        cat "$CLAUDE_MD_SOURCE" >> "$GLOBAL_CLAUDE_MD"
-        echo "" >> "$GLOBAL_CLAUDE_MD"
-        echo "$MARKER_END" >> "$GLOBAL_CLAUDE_MD"
+        cp "$CLAUDE_MD_SOURCE" "$PROJECT_CLAUDE_MD"
+        success "CLAUDE.md installed at $PROJECT_CLAUDE_MD"
     fi
-    success "Global CLAUDE.md installed at $GLOBAL_CLAUDE_MD"
 else
     warn "CLAUDE.md not found in package. Agent will work but without auto-trigger instructions."
 fi
@@ -406,13 +379,17 @@ echo -e "${GREEN}============================================${NC}"
 echo ""
 echo -e "  Install mode:  ${CYAN}$INSTALL_MODE${NC}"
 echo -e "  Install path:  ${CYAN}$INSTALL_DIR${NC}"
-echo -e "  MCP scope:     ${CYAN}user (global — works in any directory)${NC}"
+echo -e "  MCP scope:     ${CYAN}project-level (.mcp.json)${NC}"
+echo -e "  MCP config:    ${CYAN}$MCP_JSON${NC}"
 echo ""
 echo -e "  ${CYAN}How to use:${NC}"
-echo "    1. Open any terminal directory"
+echo "    1. cd into this project directory"
 echo "    2. Run: claude"
 echo "    3. Say: \"invoke projectguide-agent\""
 echo "    4. Or say: \"Good morning\" for daily standup"
+echo ""
+echo -e "  ${YELLOW}NOTE:${NC} The agent is scoped to this project only."
+echo "  To use it in another project, copy the .mcp.json file there."
 echo ""
 
 if [ "$PATH_ADDED" = true ]; then

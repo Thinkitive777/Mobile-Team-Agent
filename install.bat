@@ -1,5 +1,5 @@
 @echo off
-:: Project Guide Agent — Quick Installer
+:: Project Guide Agent — Quick Installer (Windows)
 :: Just unzip and double-click install.bat
 
 set "SCRIPT_DIR=%~dp0"
@@ -12,15 +12,18 @@ if not exist "%AGENT_DIR%" (
     exit /b 1
 )
 
-if exist "%AGENT_DIR%\Scripts\install.bat" (
-    call "%AGENT_DIR%\Scripts\install.bat"
-) else if exist "%AGENT_DIR%\install.bat" (
-    call "%AGENT_DIR%\install.bat"
-) else (
+set "INSTALLER="
+
+if exist "%AGENT_DIR%\install.bat" (
+    set "INSTALLER=%AGENT_DIR%\install.bat"
+) else if exist "%AGENT_DIR%\Scripts\install.bat" (
+    set "INSTALLER=%AGENT_DIR%\Scripts\install.bat"
+)
+
+if "%INSTALLER%"=="" (
     echo Error: Installer not found.
-    echo Expected either:
-    echo   %AGENT_DIR%\install.bat
-    echo   %AGENT_DIR%\Scripts\install.bat
     pause
     exit /b 1
 )
+
+call "%INSTALLER%"

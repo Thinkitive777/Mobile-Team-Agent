@@ -1,0 +1,1 @@
+Call the `get_setup_status` tool to show connection status for all integrations (Jira, GitHub), saved preferences (project, sprint, assignee), report count, and next steps for anything not yet configured.

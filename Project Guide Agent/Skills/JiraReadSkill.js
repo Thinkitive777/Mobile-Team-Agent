@@ -1,6 +1,7 @@
 const BaseSkill = require("./Core/BaseSkill");
 const { validate, ticketKeySchema } = require("../Utils/validators");
 const CONST = require("../Constants/constants");
+const MemoryManager = require("../Services/memory-manager");
 
 function isTicketBlocked(ticket) {
   const nameBlocked = (ticket.summary + ' ' + ticket.status).toLowerCase().includes('blocked');
@@ -499,6 +500,31 @@ class JiraReadSkill extends BaseSkill {
             out += `  ${c.author} (${c.created?.substring(0, 10)}):\n    ${(c.body || '').substring(0, 100)}...\n\n`;
           }
         }
+
+        // Surface saved memory for this ticket
+        try {
+          const memCtx = MemoryManager.getContextForTicket(args.ticket_key);
+          const totalMem = memCtx.ticketNotes.length + memCtx.journalEntries.length + memCtx.decisions.length;
+          if (totalMem > 0) {
+            out += `--- Your Notes (from memory) ---\n`;
+            for (const n of memCtx.ticketNotes.slice(-5)) {
+              out += `  [${n.category}] ${n.timestamp.substring(0, 10)}: ${n.text}\n`;
+            }
+            if (memCtx.decisions.length > 0) {
+              for (const d of memCtx.decisions) {
+                const status = d.resolved ? 'resolved' : 'active';
+                out += `  [decision/${status}] ${d.text}\n`;
+              }
+            }
+            if (memCtx.journalEntries.length > 0) {
+              out += `  (${memCtx.journalEntries.length} journal mention(s) — use "recall_ticket ${args.ticket_key}" for full history)\n`;
+            }
+            out += `\n`;
+          }
+        } catch (memErr) {
+          // Non-fatal — memory is optional
+        }
+
         return this.textResponse(out);
       }
 

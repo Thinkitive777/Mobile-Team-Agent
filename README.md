@@ -19,11 +19,11 @@ chmod +x install.sh && ./install.sh
 2. Double-click install.bat
 ```
 
-That's it. The agent is now available **globally** — works in any directory on your machine.
+That's it. The agent is now available in this project via `.mcp.json`.
 
 ## Usage
 
-Open any terminal, run `claude`, then:
+Open a terminal **in this project directory**, run `claude`, then:
 
 | Say this | What happens |
 |----------|-------------|
@@ -52,13 +52,12 @@ After invoking, connect your tools:
 ## How It Works
 
 The installer:
-1. Copies the agent binary to `~/.projectguide-agent/` (falls back to Node.js source if binary fails)
+1. Copies the agent source/binary to `~/.projectguide-agent/` (falls back to Node.js source if binary fails)
 2. Verifies the binary responds to MCP protocol before proceeding
-3. Registers the MCP server at **user scope** via `claude mcp add -s user` (writes to `~/.claude.json`)
-4. Verifies registration succeeded, with a direct `~/.claude.json` fallback if the CLI command fails
-5. Installs agent instructions to `~/.claude/CLAUDE.md`
+3. Creates a **project-level `.mcp.json`** in the project root directory
+4. Ensures `CLAUDE.md` with agent instructions is in the project root
 
-This means any `claude` session in any directory will have access to the agent.
+The agent is scoped to this project — it activates when you run `claude` from this directory. To use it in another project, copy the `.mcp.json` file there.
 
 ## Supported Platforms
 
@@ -84,7 +83,7 @@ chmod +x uninstall.sh && ./uninstall.sh
 Double-click uninstall.bat
 ```
 
-This removes the binary, MCP registration from `~/.claude.json`, global CLAUDE.md entries, and PATH additions. Daily reports can be optionally preserved.
+This removes the binary, the `projectguide-agent` entry from `.mcp.json`, PATH additions, and the installed source. Daily reports can be optionally preserved.
 
 ## For Developers
 
@@ -100,20 +99,39 @@ npm run build:dist      # Build + create distribution zip
 ### Project structure
 ```
 Project Guide Agent/
-├── index.js              # MCP server (v2.1.0)
-├── jira-client.js        # Jira REST API client
-├── git-utils.js          # Git integration
-├── report-manager.js     # Report storage & generation
-├── constants.js          # Configuration
-├── errors.js             # Error classes
-├── logger.js             # Structured logging
-├── validators.js         # Zod input validation
-├── install.sh / .bat     # Platform installers
-├── uninstall.sh / .bat   # Platform uninstallers
-├── invoke / invoke.bat   # CLI wrapper scripts
-└── dist/                 # Pre-built binaries
+├── Main/
+│   ├── index.js            # MCP server entry point
+│   └── SkillRegistry.js    # Skill loader and registry
+├── Skills/
+│   ├── Core/BaseSkill.js   # Base class for all skills
+│   ├── GitSkill.js         # Git commit analysis
+│   ├── JiraReadSkill.js    # Jira read operations
+│   ├── JiraWriteSkill.js   # Jira write operations
+│   ├── LegacySkill.js      # Backward-compatible tools
+│   ├── MemorySkill.js      # Persistent memory (notes, journal, decisions)
+│   ├── SetupSkill.js       # Connection management and health checks
+│   ├── WorkflowSkill.js    # Standup, day planning, EOD reports
+│   └── prompts/            # Modular prompt chunks per skill
+├── Services/
+│   ├── jira-client.js      # Jira REST API client (retry, rate-limit)
+│   ├── memory-manager.js   # Persistent JSON storage for memory
+│   ├── offline-queue.js    # Offline action queue for Jira writes
+│   └── report-manager.js   # Daily/weekly report persistence
+├── Utils/
+│   ├── errors.js           # Error classes
+│   ├── git-utils.js        # Git diff/log utilities
+│   ├── logger.js           # Structured logging
+│   └── validators.js       # Zod input validation
+├── Constants/
+│   └── constants.js        # Configuration constants
+├── Scripts/
+│   ├── install.sh / .bat   # Platform installers
+│   ├── uninstall.sh / .bat # Platform uninstallers
+│   └── invoke / invoke.bat # CLI wrapper scripts
+├── dist/                   # Pre-built binaries
+└── package.json
 ```
 
 ## Version
 
-v2.1.0 — Production-hardened with validation, retries, rate limiting, blocker detection, carry-forward, weekly summaries, health checks, and structured logging.
+v3.3.0 — Modular skill architecture, persistent memory (notes/journal/decisions), code-aware daily planning, file-level Git diff analysis, and offline Jira resilience.

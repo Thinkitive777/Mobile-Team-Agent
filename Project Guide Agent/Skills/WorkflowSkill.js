@@ -3,6 +3,7 @@ const { validate, dateSchema } = require("../Utils/validators");
 const CONST = require("../Constants/constants");
 const ReportManager = require("../Services/report-manager");
 const GitUtils = require("../Utils/git-utils");
+const MemoryManager = require("../Services/memory-manager");
 
 class WorkflowSkill extends BaseSkill {
   constructor() {
@@ -420,6 +421,32 @@ class WorkflowSkill extends BaseSkill {
           out += `\n`;
         }
 
+        // === Memory Context ===
+        try {
+          const memCtx = MemoryManager.getContextForToday();
+          if (memCtx.activeDecisions.length > 0) {
+            out += `ACTIVE DECISIONS (${memCtx.activeDecisions.length}):\n`;
+            for (const d of memCtx.activeDecisions.slice(0, 5)) {
+              const tickets = d.relatedTickets.length > 0 ? ` [${d.relatedTickets.join(', ')}]` : '';
+              out += `  - ${d.text}${tickets}\n`;
+            }
+            out += `\n`;
+          }
+          // Show notes for in-progress tickets
+          for (const t of inProgress) {
+            const ticketNotes = MemoryManager.getTicketNotes(t.key);
+            if (ticketNotes.length > 0) {
+              const latest = ticketNotes[ticketNotes.length - 1];
+              out += `  Note on ${t.key}: "${latest.text}" (${latest.timestamp.substring(0, 10)})\n`;
+            }
+          }
+          if (inProgress.some(t => MemoryManager.getTicketNotes(t.key).length > 0)) {
+            out += `\n`;
+          }
+        } catch (memErr) {
+          // Non-fatal — memory is optional
+        }
+
         // === Today's Recommended Plan ===
         out += `${'='.repeat(60)}\n`;
         out += `TODAY'S RECOMMENDED PLAN:\n\n`;
@@ -527,6 +554,20 @@ class WorkflowSkill extends BaseSkill {
         if (args.extra_work) {
           const entries = args.extra_work.split(',').map(e => e.trim()).filter(Boolean);
           extraWork.push(...entries);
+        }
+
+        // Include journal entries from today as extra context
+        try {
+          const todayJournal = MemoryManager.getJournalForDate(reportDate);
+          for (const j of todayJournal) {
+            const jText = j.text;
+            // Don't duplicate if already in extraWork
+            if (!extraWork.some(w => w.includes(jText)) && !completed.some(t => jText.includes(t.key))) {
+              extraWork.push(`[Journal] ${jText}`);
+            }
+          }
+        } catch (memErr) {
+          // Non-fatal
         }
 
         let notes = '';

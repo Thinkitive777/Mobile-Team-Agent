@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "projectguide-agent": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["Project Guide Agent/Main/index.js"],
+      "env": {}
+    }
+  }
+}
