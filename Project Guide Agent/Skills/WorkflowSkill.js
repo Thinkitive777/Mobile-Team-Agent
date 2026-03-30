@@ -310,24 +310,6 @@ class WorkflowSkill extends BaseSkill {
         if (projectFilter) out += ` (project: ${projectFilter})`;
         out += '\n';
 
-        // Save to Desktop under the project directory if a project is active
-        const repoPath = (() => { try { return getRepoPath(); } catch { return null; } })();
-        const dailyUpdatesProject = args.project
-          || (config && config.jira && config.jira.active_project && config.jira.active_project !== '__default__'
-              ? config.jira.active_project
-              : null)
-          || preferences.last_project
-          || (repoPath ? path.basename(repoPath) : null);
-
-        if (dailyUpdatesProject) {
-          try {
-            const savedPath = ReportManager.saveProjectReport(todayStr, out, dailyUpdatesProject);
-            out += `\nSaved to Desktop: ${savedPath}`;
-          } catch (saveErr) {
-            Logger.warn('Failed to save daily updates to Desktop', { error: saveErr.message });
-          }
-        }
-
         return this.textResponse(out);
       }
 
