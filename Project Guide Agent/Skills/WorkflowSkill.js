@@ -22,18 +22,8 @@ class WorkflowSkill extends BaseSkill {
         inputSchema: { type: "object", properties: {} },
       },
       {
-        name: "get_daily_updates",
-        description: "Legacy: return a raw summary of today's work (commits + Jira progress). Prefer end_of_day_report for the formatted daily updates file.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            project: { type: "string", description: "Jira project key to scope ticket query (optional)" },
-          },
-        },
-      },
-      {
         name: "end_of_day_report",
-        description: "Triggered by 'today's updates', 'daily updates', 'my updates', 'list of tasks done', 'report of today'. Creates ~/Desktop/Todays Updates/updates-ddmmyyyy.md with project-wise completed tickets, commits, and work summary. If nothing was done today, returns a 'no updates' message.",
+        description: "Triggered by ANY report/update intent: 'today's updates', 'daily updates', 'my updates', 'provide updates', 'provide report', 'list of tasks done', 'report of today', 'end of day', 'EOD', 'wrap up'. Creates ~/Desktop/Todays Updates/updates-ddmmyyyy.md with project-wise completed tickets, commits, and work summary. If nothing was done today, returns a 'no updates' message. NEVER use run_skill for this — call end_of_day_report directly.",
         inputSchema: {
           type: "object",
           properties: {
@@ -234,85 +224,6 @@ class WorkflowSkill extends BaseSkill {
         return this.textResponse(out);
       }
 
-      case "get_daily_updates": {
-        // Intent-based updates: "today's updates", "my updates", "provide updates"
-        // Returns a focused summary of what the user has done today.
-        const now = new Date();
-        const todayStr = ReportManager.formatDate(now);
-        const projectFilter = args.project || preferences.last_project || null;
-
-        let commits = [];
-        let gitError = null;
-        try { commits = await GitUtils.getTodayCommits(getRepoPath()); } catch (err) { gitError = err.message; }
-
-        let updatedTickets = [];
-        let completedTickets = [];
-        let inProgressTickets = [];
-        let jiraError = null;
-        try {
-          const client = getJiraClient();
-          const projectClause = projectFilter ? ` AND project = "${projectFilter}"` : '';
-          const result = await client.searchTickets(
-            `assignee = currentUser() AND updated >= "${todayStr}"${projectClause} ORDER BY updated DESC`
-          );
-          updatedTickets = result.tickets;
-          completedTickets = result.tickets.filter(t => t.statusCategory === "Done" || t.status === "Done");
-          inProgressTickets = result.tickets.filter(t => t.status === "In Progress");
-        } catch (err) {
-          jiraError = err.message;
-        }
-
-        let out = `Daily Updates — ${now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}\n\n`;
-        if (projectFilter) out += `Project: ${projectFilter}\n\n`;
-
-        // Commits section
-        if (commits.length > 0) {
-          out += `## Code Changes (${commits.length} commit(s) today)\n`;
-          for (const c of commits) {
-            const ticketTag = c.ticketIds.length > 0 ? ` [${c.ticketIds.join(', ')}]` : '';
-            out += `  - ${c.hash}: ${c.message}${ticketTag}\n`;
-          }
-          out += '\n';
-        } else if (!gitError) {
-          out += `## Code Changes\n  - No commits today\n\n`;
-        }
-        if (gitError) out += `[Git unavailable: ${gitError}]\n\n`;
-
-        // Jira ticket progress
-        if (!jiraError) {
-          if (completedTickets.length > 0) {
-            out += `## Completed Tickets (${completedTickets.length})\n`;
-            for (const t of completedTickets) out += `  - ${t.key}: ${t.summary}\n`;
-            out += '\n';
-          }
-          if (inProgressTickets.length > 0) {
-            out += `## In Progress (${inProgressTickets.length})\n`;
-            for (const t of inProgressTickets) out += `  - ${t.key}: ${t.summary}\n`;
-            out += '\n';
-          }
-          if (updatedTickets.length > 0 && completedTickets.length === 0 && inProgressTickets.length === 0) {
-            out += `## Updated Tickets (${updatedTickets.length})\n`;
-            for (const t of updatedTickets) out += `  - ${t.key}: ${t.summary} [${t.status}]\n`;
-            out += '\n';
-          }
-          if (updatedTickets.length === 0) {
-            out += `## Jira Tickets\n  - No tickets updated today\n\n`;
-          }
-        } else {
-          out += `[Jira unavailable: ${jiraError}]\n\n`;
-        }
-
-        // Summary line
-        const commitCount = commits.length;
-        const doneCount = completedTickets.length;
-        const wipCount = inProgressTickets.length;
-        out += `---\nSummary: ${commitCount} commit(s), ${doneCount} completed, ${wipCount} in progress`;
-        if (projectFilter) out += ` (project: ${projectFilter})`;
-        out += '\n';
-
-        return this.textResponse(out);
-      }
-
       case "end_of_day_report": {
         if (args.date) {
           const dateCheck = validate(dateSchema, args.date);
@@ -441,15 +352,26 @@ class WorkflowSkill extends BaseSkill {
 
         // Save to ~/Desktop/Todays Updates/updates-ddmmyyyy.md
         const todaysUpdatesDir = path.join(os.homedir(), 'Desktop', 'Todays Updates');
-        if (!fs.existsSync(todaysUpdatesDir)) {
-          fs.mkdirSync(todaysUpdatesDir, { recursive: true, mode: 0o755 });
+        let reportFilePath = null;
+        let saveError = null;
+        try {
+          if (!fs.existsSync(todaysUpdatesDir)) {
+            fs.mkdirSync(todaysUpdatesDir, { recursive: true });
+          }
+          reportFilePath = path.join(todaysUpdatesDir, `updates-${filenameDatePart}.md`);
+          fs.writeFileSync(reportFilePath, content, { encoding: 'utf-8' });
+          Logger.info('Daily updates saved', { path: reportFilePath });
+        } catch (err) {
+          saveError = err.message;
+          Logger.error('Failed to save daily updates', { error: err.message, dir: todaysUpdatesDir });
         }
-        const reportFilePath = path.join(todaysUpdatesDir, `updates-${filenameDatePart}.md`);
-        fs.writeFileSync(reportFilePath, content, { encoding: 'utf-8', mode: CONST.REPORT_FILE_PERMISSIONS });
-        Logger.info('Daily updates saved', { path: reportFilePath });
 
         let out = `Daily Updates — ${displayDate}\n\n`;
-        out += `Saved to: ${reportFilePath}\n\n`;
+        if (reportFilePath && !saveError) {
+          out += `Saved to: ${reportFilePath}\n\n`;
+        } else if (saveError) {
+          out += `Note: Could not save file to Desktop — ${saveError}\n\n`;
+        }
         out += content;
 
         return this.textResponse(out);
