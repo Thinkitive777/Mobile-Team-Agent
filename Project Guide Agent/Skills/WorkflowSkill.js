@@ -1,3 +1,5 @@
+const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const BaseSkill = require("./Core/BaseSkill");
 const { validate, dateSchema } = require("../Utils/validators");
@@ -21,7 +23,7 @@ class WorkflowSkill extends BaseSkill {
       },
       {
         name: "get_daily_updates",
-        description: "Return a summary of today's work when user asks for updates (e.g. 'today's updates', 'my updates', 'provide updates', 'what have I done today'). Aggregates GitHub commits, Jira ticket progress, and code changes.",
+        description: "Legacy: return a raw summary of today's work (commits + Jira progress). Prefer end_of_day_report for the formatted daily updates file.",
         inputSchema: {
           type: "object",
           properties: {
@@ -31,12 +33,12 @@ class WorkflowSkill extends BaseSkill {
       },
       {
         name: "end_of_day_report",
-        description: "Generate, save, and display end-of-day report. Saves to ~/.projectguide-agent and also to Desktop/ProjectGuide-Updates/<project>/ when a project is active.",
+        description: "Triggered by 'today's updates', 'daily updates', 'my updates', 'list of tasks done', 'report of today'. Creates ~/Desktop/Todays Updates/updates-ddmmyyyy.md with project-wise completed tickets, commits, and work summary. If nothing was done today, returns a 'no updates' message.",
         inputSchema: {
           type: "object",
           properties: {
             date: { type: "string", description: "Report date (default: today, YYYY-MM-DD)" },
-            project_name: { type: "string", description: "Project name for Desktop storage (default: active Jira project)" },
+            project_name: { type: "string", description: "Project name override (default: inferred from active Jira project)" },
           },
         },
       },
@@ -129,8 +131,14 @@ class WorkflowSkill extends BaseSkill {
         if (gitError) out += `[Git unavailable: ${gitError}]\n\n`;
 
         if (tickets.length > 0) {
-          const highPriority = tickets.filter(t => t.priority === "Highest" || t.priority === "High");
+          // Categorise by status
+          const toDo = tickets.filter(t =>
+            t.status === "To Do" || t.status === "Open" || t.status === "Backlog" || t.status === "Selected for Development"
+          );
           const inProgress = tickets.filter(t => t.status === "In Progress");
+          const devDone = tickets.filter(t =>
+            t.status === "Development Done" || t.status === "Dev Done" || t.status === "Code Review" || t.status === "In Review"
+          );
           const overdue = tickets.filter(t => t.dueDate && new Date(t.dueDate) < now);
 
           out += `Workload: ${tickets.length} pending`;
@@ -138,45 +146,64 @@ class WorkflowSkill extends BaseSkill {
           out += `\n\n`;
 
           if (overdue.length > 0) {
-            out += `OVERDUE (${overdue.length}):\n`;
-            for (const t of overdue) out += `  - ${t.key}: ${t.summary} (due ${t.dueDate})\n`;
-            out += `\n`;
-          }
-
-          if (highPriority.length > 0) {
-            out += `High Priority (${highPriority.length}):\n`;
-            for (const t of highPriority) {
-               out += `  - ${t.key}: ${t.summary}${t.dueDate ? ` (due ${t.dueDate})` : ''}\n`;
-            }
+            out += `⚠️  OVERDUE (${overdue.length}):\n`;
+            for (const t of overdue) out += `  - ${t.key}: ${t.summary} [${t.priority}] (due ${t.dueDate})\n`;
             out += `\n`;
           }
 
           if (inProgress.length > 0) {
-            out += `Currently Working On (${inProgress.length}):\n`;
+            out += `🔄  In Progress (${inProgress.length}):\n`;
             for (const t of inProgress) {
               const related = commits.filter(c => c.ticketIds.includes(t.key));
-              out += `  - ${t.key}: ${t.summary}${related.length > 0 ? ` (${related.length} recent commit(s))` : ''}\n`;
+              out += `  - ${t.key}: ${t.summary} [${t.priority}]${related.length > 0 ? ` · ${related.length} recent commit(s)` : ''}\n`;
             }
             out += `\n`;
           }
 
-          out += `--- Suggested Plan ---\n`;
+          if (devDone.length > 0) {
+            out += `✅  Development Done / In Review (${devDone.length}):\n`;
+            for (const t of devDone) out += `  - ${t.key}: ${t.summary} [${t.priority}]\n`;
+            out += `\n`;
+          }
+
+          if (toDo.length > 0) {
+            out += `📋  To Do (${toDo.length}):\n`;
+            for (const t of toDo) out += `  - ${t.key}: ${t.summary} [${t.priority}]\n`;
+            out += `\n`;
+          }
+
+          // Score tickets: priority weight + type bonus, suggest next work
+          const PRIORITY_SCORE = { Highest: 5, High: 4, Medium: 3, Low: 2, Lowest: 1 };
+          const TYPE_BONUS = { Bug: 2, Hotfix: 2, Story: 1, Task: 0, Subtask: 0 };
+          const scored = tickets
+            .filter(t => t.status !== "Development Done" && t.status !== "Dev Done" && t.status !== "Code Review" && t.status !== "In Review")
+            .map(t => ({
+              ticket: t,
+              score: (PRIORITY_SCORE[t.priority] || 2) + (TYPE_BONUS[t.type] || 0) + (t.dueDate && new Date(t.dueDate) < now ? 3 : 0),
+            }))
+            .sort((a, b) => b.score - a.score);
+
+          out += `--- Suggested Next Work ---\n`;
           let step = 1;
           if (inProgress.length > 0) {
-            out += `${step++}. Continue: ${inProgress[0].key} — ${inProgress[0].summary}\n`;
-            const inProgressKeys = new Set(inProgress.map(t => t.key));
-            const nextHigh = highPriority.find(t => !inProgressKeys.has(t.key));
-            if (nextHigh) out += `${step++}. Prioritize: ${nextHigh.key} — ${nextHigh.summary}\n`;
-          } else if (overdue.length > 0) {
-            out += `${step++}. Urgent: ${overdue[0].key} — ${overdue[0].summary} (OVERDUE)\n`;
-          } else if (highPriority.length > 0) {
-            out += `${step++}. Start: ${highPriority[0].key} — ${highPriority[0].summary}\n`;
+            out += `${step++}. Continue: ${inProgress[0].key} — ${inProgress[0].summary} [${inProgress[0].priority}]\n`;
+          }
+          if (devDone.length > 0) {
+            out += `${step++}. Needs review/merge: ${devDone[0].key} — ${devDone[0].summary}\n`;
+          }
+          for (const { ticket } of scored.filter(s => s.ticket.status !== "In Progress").slice(0, 2)) {
+            const reason = ticket.dueDate && new Date(ticket.dueDate) < now
+              ? 'OVERDUE'
+              : ticket.priority === "Highest" || ticket.priority === "High"
+              ? `${ticket.priority} priority`
+              : ticket.type === "Bug" ? 'Bug fix' : `${ticket.priority} priority`;
+            out += `${step++}. Pick up: ${ticket.key} — ${ticket.summary} (${reason})\n`;
           }
           out += `\n`;
         }
 
         if (commits.length > 0) {
-          out += `Recent Activity (${commits.length} commit(s) in ${CONST.STANDUP_COMMIT_WINDOW}):\n`;
+          out += `Recent Activity (${commits.length} commit(s) in last 48h):\n`;
           for (const c of commits.slice(0, CONST.COMMITS_PREVIEW_LIMIT)) {
             const ticketTag = c.ticketIds.length > 0 ? ` [${c.ticketIds.join(", ")}]` : '';
             out += `  - ${c.hash}: ${c.message}${ticketTag}\n`;
@@ -196,8 +223,8 @@ class WorkflowSkill extends BaseSkill {
         const greeting = preferences.greeting_name ? `${preferences.greeting_name}, w` : 'W';
         out += `--- ${greeting}hat would you like to work on today? ---\n`;
         if (tickets.length > 0) {
-          const inProgress = tickets.filter(t => t.status === "In Progress");
-          const topPicks = inProgress.length > 0 ? inProgress : tickets.slice(0, 3);
+          const inProgressNow = tickets.filter(t => t.status === "In Progress");
+          const topPicks = inProgressNow.length > 0 ? inProgressNow.slice(0, 3) : tickets.slice(0, 3);
           out += `Quick picks:\n`;
           topPicks.forEach((t, i) => out += `  ${i + 1}. ${t.key}: ${t.summary} [${t.priority}]\n`);
           out += `\nSay a ticket key (e.g. "${topPicks[0].key}") to get a full implementation plan.\n`;
@@ -311,71 +338,138 @@ class WorkflowSkill extends BaseSkill {
         }
         const reportDate = args.date || ReportManager.formatDate();
 
-        // Determine project name for Desktop storage
-        const projectName = args.project_name
+        let commits = [];
+        let gitError = null;
+        try { commits = await GitUtils.getTodayCommits(getRepoPath()); } catch (err) { gitError = err.message; }
+
+        let allTickets = [];
+        let jiraError = null;
+        try {
+          const client = getJiraClient();
+          const result = await client.searchTickets(
+            `assignee = currentUser() AND updated >= "${reportDate}" ORDER BY updated DESC`
+          );
+          allTickets = result.tickets;
+        } catch (err) {
+          jiraError = err.message;
+        }
+
+        const completedTickets = allTickets.filter(t => t.statusCategory === "Done" || t.status === "Done");
+
+        // Early exit if nothing to report
+        if (commits.length === 0 && completedTickets.length === 0 && !gitError && !jiraError) {
+          return this.textResponse("No updates for today. Would you like to pick up a task?");
+        }
+
+        // Group completed tickets by project key (e.g. "CMDN" from "CMDN-123")
+        const ticketsByProject = {};
+        for (const t of completedTickets) {
+          const proj = t.key.split('-')[0];
+          if (!ticketsByProject[proj]) ticketsByProject[proj] = [];
+          ticketsByProject[proj].push(t);
+        }
+
+        // Group commits by project key via ticketIds extracted from messages
+        const commitsByProject = {};
+        const unlinkedCommits = [];
+        for (const c of commits) {
+          const projects = [...new Set(c.ticketIds.map(id => id.split('-')[0]))];
+          if (projects.length === 0) {
+            unlinkedCommits.push(c);
+          } else {
+            for (const p of projects) {
+              if (!commitsByProject[p]) commitsByProject[p] = [];
+              commitsByProject[p].push(c);
+            }
+          }
+        }
+
+        // Collect all project keys (from tickets + commits), preserve insertion order
+        const allProjects = [
+          ...new Set([
+            ...Object.keys(ticketsByProject),
+            ...Object.keys(commitsByProject),
+          ]),
+        ];
+        if (unlinkedCommits.length > 0 && allProjects.length === 0) allProjects.push('General');
+        if (unlinkedCommits.length > 0 && !allProjects.includes('General')) allProjects.push('General');
+
+        // Determine project display name from args or config
+        const activeProjectKey = args.project_name
           || (config && config.jira && config.jira.active_project && config.jira.active_project !== '__default__'
               ? config.jira.active_project
               : null)
           || preferences.last_project
           || null;
 
-        let commits = [];
-        let gitError = null;
-        try { commits = await GitUtils.getTodayCommits(getRepoPath()); } catch (err) { gitError = err.message; }
+        // Format date as dd/mm/yyyy for display and ddmmyyyy for filename
+        const [yyyy, mm, dd] = reportDate.split('-');
+        const displayDate = `${dd}/${mm}/${yyyy}`;
+        const filenameDatePart = `${dd}${mm}${yyyy}`;
 
-        let completed = [];
-        let inProgress = [];
-        let jiraError = null;
-        try {
-          const client = getJiraClient();
-          const result = await client.searchTickets(`assignee = currentUser() AND updated >= "${reportDate}" ORDER BY updated DESC`);
-          completed = result.tickets.filter(t => t.statusCategory === "Done" || t.status === "Done");
-          inProgress = result.tickets.filter(t => t.status === "In Progress");
-        } catch (err) {
-          jiraError = err.message;
-        }
+        // Build markdown content in required format
+        let content = `Daily Updates - ${displayDate}\n\n`;
 
-        const carryForward = ReportManager.getYesterdayCarryForward().filter(item => !completed.some(t => item.includes(t.key)));
-        for (const t of inProgress) {
-          const entry = `${t.key}: ${t.summary}`;
-          if (!carryForward.includes(entry)) carryForward.push(entry);
-        }
+        if (jiraError) content += `> Note: Jira unavailable — ${jiraError}\n\n`;
+        if (gitError) content += `> Note: Git unavailable — ${gitError}\n\n`;
 
-        let notes = '';
-        if (commits.length > 0) notes += `${commits.length} commit(s) made today. `;
-        if (completed.length > 0) notes += `${completed.length} ticket(s) completed. `;
-        if (projectName) notes += `Project: ${projectName}. `;
-        if (jiraError) notes += `[Jira was unavailable: ${jiraError}]`;
-        if (!jiraError && gitError) notes += `[Git was unavailable: ${gitError}]`;
-        if (!notes) notes = 'Quiet day.';
+        for (const proj of allProjects) {
+          const projTickets = ticketsByProject[proj] || [];
+          const projCommits = proj === 'General' ? unlinkedCommits : (commitsByProject[proj] || []);
 
-        const report = ReportManager.generateDailyReport(reportDate, {
-          completed: completed.map(t => `${t.key}: ${t.summary}`),
-          inProgress: inProgress.map(t => `${t.key}: ${t.summary}`),
-          commits, carryForward, blockers: [], notes,
-        });
+          // Determine a display name: use the active project name if key matches, otherwise use key
+          const projDisplayName = (activeProjectKey && proj !== 'General' && proj === activeProjectKey.split('-')[0])
+            ? activeProjectKey
+            : proj;
 
-        // Always save to the standard reports directory
-        const reportPath = ReportManager.saveReport(reportDate, report);
+          content += `Project: ${projDisplayName}\n\n`;
 
-        // Also save to Desktop under the project directory if a project is active
-        let desktopPath = null;
-        if (projectName) {
-          try {
-            desktopPath = ReportManager.saveProjectReport(reportDate, report, projectName);
-          } catch (desktopErr) {
-            Logger.warn('Failed to save Desktop project report', { error: desktopErr.message });
+          content += `Completed Tickets\n`;
+          if (projTickets.length > 0) {
+            for (const t of projTickets) content += `${t.key} - ${t.summary}\n`;
+          } else {
+            content += `No completed tickets\n`;
           }
+          content += `\n`;
+
+          content += `Commits\n`;
+          if (projCommits.length > 0) {
+            for (const c of projCommits) {
+              // Normalised format: strip ticket prefix from message if already present, show clean message
+              const cleanMsg = c.message.replace(/^[A-Z][A-Z0-9]+-\d+\s*[-:]?\s*/i, '').trim() || c.message;
+              content += `${cleanMsg}\n`;
+            }
+          } else {
+            content += `No commits\n`;
+          }
+          content += `\n`;
+
+          content += `Summary of Work\n`;
+          const summaryParts = [];
+          if (projTickets.length > 0) {
+            summaryParts.push(`Completed ${projTickets.length} ticket(s): ${projTickets.map(t => t.key).join(', ')}`);
+          }
+          if (projCommits.length > 0) {
+            summaryParts.push(`Made ${projCommits.length} commit(s)`);
+            const areas = [...new Set(projCommits.flatMap(c => c.ticketIds))];
+            if (areas.length > 0) summaryParts.push(`related to ${areas.slice(0, 3).join(', ')}`);
+          }
+          content += (summaryParts.length > 0 ? summaryParts.join('. ') + '.' : 'No significant changes today.') + '\n';
+          content += `\n`;
         }
 
-        let out = `End-of-Day Report — ${reportDate}\n\nSaved to: ${reportPath}\n`;
-        if (desktopPath) out += `Also saved to Desktop: ${desktopPath}\n`;
-        out += `\nSummary:\n`;
-        out += `- ${commits.length} commit(s)\n- ${completed.length} ticket(s) completed\n`;
-        out += `- ${inProgress.length} ticket(s) in progress\n- ${carryForward.length} item(s) carry forward\n`;
-        if (projectName) out += `- Project: ${projectName}\n`;
-        if (jiraError) out += `\n[Jira was unavailable — report based on Git data only]\n`;
-        if (gitError) out += `\n[Git was unavailable — commit section may be incomplete]\n`;
+        // Save to ~/Desktop/Todays Updates/updates-ddmmyyyy.md
+        const todaysUpdatesDir = path.join(os.homedir(), 'Desktop', 'Todays Updates');
+        if (!fs.existsSync(todaysUpdatesDir)) {
+          fs.mkdirSync(todaysUpdatesDir, { recursive: true, mode: 0o755 });
+        }
+        const reportFilePath = path.join(todaysUpdatesDir, `updates-${filenameDatePart}.md`);
+        fs.writeFileSync(reportFilePath, content, { encoding: 'utf-8', mode: CONST.REPORT_FILE_PERMISSIONS });
+        Logger.info('Daily updates saved', { path: reportFilePath });
+
+        let out = `Daily Updates — ${displayDate}\n\n`;
+        out += `Saved to: ${reportFilePath}\n\n`;
+        out += content;
 
         return this.textResponse(out);
       }
