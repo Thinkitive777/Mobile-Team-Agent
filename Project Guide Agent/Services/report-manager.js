@@ -31,16 +31,15 @@ class ReportManager {
   }
 
   static formatDailyFilename(dateStr) {
-    // Convert 'YYYY-MM-DD' → 'ddmmmyy' (e.g. '2026-03-27' → '27mar26')
-    const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+    // Convert 'YYYY-MM-DD' → 'DD-MM-YYYY' (e.g. '2026-03-27' → '27-03-2026')
     const [year, month, day] = dateStr.split('-');
-    return `${day}${months[parseInt(month, 10) - 1]}${year.slice(2)}`;
+    return `${day}-${month}-${year}`;
   }
 
   static getProjectReportPath(date, projectName) {
     const dir = this.getProjectDir(projectName);
     const dateStr = typeof date === 'string' ? date : this.formatDate(date);
-    return path.join(dir, `daily_updates_${this.formatDailyFilename(dateStr)}.md`);
+    return path.join(dir, `${this.formatDailyFilename(dateStr)}_updates.md`);
   }
 
   static saveProjectReport(date, content, projectName) {
@@ -190,12 +189,16 @@ class ReportManager {
     const content = this.getReport(this.formatDate(yesterday));
     if (!content) return [];
 
-    const match = content.match(/## 🚧 In Progress\n([\s\S]*?)(?=\n## )/);
+    // Support new format (🟡 Pending Tasks) and old format (🚧 In Progress)
+    let match = content.match(/## 🟡 Pending Tasks\n([\s\S]*?)(?=\n---\n|\n## |$)/);
+    if (!match) match = content.match(/## 🚧 In Progress\n([\s\S]*?)(?=\n## )/);
     if (!match) return [];
 
     return match[1].trim().split('\n')
-      .filter(line => line.startsWith('- ') && line !== '- None')
-      .map(line => line.replace(/^- /, ''));
+      .filter(line => line.length > 0
+        && !line.includes('No pending tasks')
+        && !line.includes('- None'))
+      .map(line => line.replace(/^[🔴🟠🟡🟢🔵🟣]\s*/, '').replace(/^- /, ''));
   }
 
   // ── Weekly summary ────────────────────────────────────────────────────
@@ -267,35 +270,62 @@ class ReportManager {
     notes = '',
   } = {}) {
     const dateStr = typeof date === 'string' ? date : this.formatDate(date);
+    const [yyyy, mm, dd] = dateStr.split('-');
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const displayDate = `${dd} ${months[parseInt(mm, 10) - 1]} ${yyyy}`;
 
-    const section = (title, items, fallback = '- None') => {
-      let s = `## ${title}\n`;
-      s += items.length > 0 ? items.map(i => `- ${i}`).join('\n') : fallback;
-      return s + '\n\n';
-    };
+    let report = `# Updates\n`;
+    report += `## Daily Updates — ${displayDate}\n\n`;
+    report += `---\n\n`;
 
-    let report = `# Daily Report - ${dateStr}\n\n`;
-    report += section('✅ Completed', completed);
-    report += section('🚧 In Progress', inProgress);
+    // Tickets Completed Today
+    report += `## 🔵 Tickets Completed Today\n`;
+    if (completed.length > 0) {
+      for (const item of completed) report += `🟢 ${item}\n`;
+    } else {
+      report += `🟡 No tickets completed today\n`;
+    }
+    report += `\n---\n\n`;
 
-    // Commits section
-    report += `## 🧾 Commits\n`;
+    // Tasks Performed (humanized commits)
+    report += `## 🟣 Tasks Performed\n`;
     if (commits.length > 0) {
-      report += `- ${commits.length} commit(s) made\n`;
+      const seen = new Set();
       for (const c of commits) {
-        const ticketTag = c.ticketIds?.length > 0 ? ` [${c.ticketIds.join(', ')}]` : '';
-        report += `- \`${c.hash}\`: ${c.message}${ticketTag}\n`;
+        let msg = c.message.replace(/^[A-Z][A-Z0-9]+-\d+\s*[-:]?\s*/i, '').trim() || c.message;
+        msg = msg.charAt(0).toUpperCase() + msg.slice(1).replace(/\.+$/, '');
+        const key = msg.slice(0, 40).toLowerCase();
+        if (!seen.has(key)) { seen.add(key); report += `🔵 ${msg}\n`; }
       }
     } else {
-      report += '- No commits today\n';
+      report += `🔴 No development activity recorded today\n`;
     }
-    report += '\n';
+    report += `\n---\n\n`;
 
-    report += section('⏭ Carry Forward', carryForward);
-    report += section('⚠️ Blockers', blockers);
+    // Pending Tasks (In Progress + Carry Forward)
+    report += `## 🟡 Pending Tasks\n`;
+    const pendingItems = [...inProgress, ...carryForward];
+    if (pendingItems.length > 0) {
+      for (const item of pendingItems) report += `🟠 ${item}\n`;
+    } else {
+      report += `🟢 No pending tasks — all caught up!\n`;
+    }
+    report += `\n---\n\n`;
 
-    report += `## 📝 Notes\n`;
-    report += notes || '- No additional notes';
+    // Notes
+    report += `## 🔴 Notes\n`;
+    let hasNotes = false;
+    if (blockers.length > 0) {
+      for (const b of blockers) report += `🟠 BLOCKED: ${b}\n`;
+      hasNotes = true;
+    }
+    if (notes) {
+      report += `🟡 ${notes}\n`;
+      hasNotes = true;
+    }
+    if (!hasNotes) {
+      report += `🟢 No risks or blockers today\n`;
+    }
     report += '\n';
 
     return report;
@@ -304,22 +334,43 @@ class ReportManager {
   // ── Internal ──────────────────────────────────────────────────────────
 
   static _extractSections(content) {
-    const extract = (header) => {
-      const re = new RegExp(`## ${header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n([\\s\\S]*?)(?=\\n## |$)`);
+    const extractSection = (header) => {
+      const re = new RegExp(`## ${header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n([\\s\\S]*?)(?=\\n---\\n|\\n## |$)`);
       const m = content.match(re);
       if (!m) return [];
       return m[1].trim().split('\n')
-        .filter(l => l.startsWith('- ') && l !== '- None' && l !== '- No commits today' && l !== '- No additional notes')
-        .map(l => l.replace(/^- /, ''));
+        .filter(l => l.length > 0
+          && !l.includes('No tickets completed today')
+          && !l.includes('No development activity recorded today')
+          && !l.includes('No pending tasks')
+          && !l.includes('No risks or blockers'))
+        .map(l => l.replace(/^[🔴🟠🟡🟢🔵🟣]\s*/, ''));
     };
 
+    // Support both old format (✅/🚧) and new format (🔵/🟣/🟡/🔴)
+    let completed = extractSection('🔵 Tickets Completed Today');
+    if (completed.length === 0) completed = extractSection('✅ Completed');
+
+    let inProgress = extractSection('🟡 Pending Tasks');
+    if (inProgress.length === 0) inProgress = extractSection('🚧 In Progress');
+
+    const tasksPerformed = extractSection('🟣 Tasks Performed');
+    const commitCount = tasksPerformed.length > 0 ? tasksPerformed.length : 0;
+
+    // Fallback for old commit format
     const commitMatch = content.match(/- (\d+) commit\(s\) made/);
+    const finalCommitCount = commitCount > 0 ? commitCount : (commitMatch ? parseInt(commitMatch[1], 10) : 0);
+
+    let blockers = extractSection('🔴 Notes');
+    if (blockers.length === 0) blockers = extractSection('⚠️ Blockers');
+    // Filter notes to only include actual blockers/overdue
+    blockers = blockers.filter(l => l.includes('OVERDUE') || l.includes('BLOCKED'));
 
     return {
-      completed: extract('✅ Completed'),
-      inProgress: extract('🚧 In Progress'),
-      commitCount: commitMatch ? parseInt(commitMatch[1], 10) : 0,
-      blockers: extract('⚠️ Blockers'),
+      completed,
+      inProgress,
+      commitCount: finalCommitCount,
+      blockers,
     };
   }
 }

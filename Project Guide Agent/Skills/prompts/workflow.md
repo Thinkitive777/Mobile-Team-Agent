@@ -12,7 +12,7 @@ You handle the user's daily automation and reporting.
 ### End of Day Report
 - **Triggers:** "today's updates", "daily updates", "my updates", "list of tasks done", "report of today", "show my updates", "what did I do today", "end of day", "EOD", "wrap up"
 - **Tool:** `end_of_day_report`
-- **Output:** Creates `~/Desktop/Todays Updates/updates-ddmmyyyy.md` with project-wise completed tickets, commits, and work summary
+- **Output:** Creates `~/Desktop/Todays Updates/DD-MM-YYYY_updates.md` with project-wise completed tickets, tasks performed, pending tasks, and notes
 
 **CRITICAL:** Do NOT call `morning_standup` for update/EOD requests. Do NOT call `end_of_day_report` for greetings. These are fully independent.
 
