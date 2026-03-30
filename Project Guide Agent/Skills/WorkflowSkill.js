@@ -443,7 +443,7 @@ class WorkflowSkill extends BaseSkill {
           if (!hasNotes) {
             content += `🟢 No risks or blockers today\n`;
           }
-          content += `\n`;
+          content += `\n*************\n\n`;
         }
 
         // Save to ~/Desktop/Todays Updates/DD-MM-YYYY_updates.md

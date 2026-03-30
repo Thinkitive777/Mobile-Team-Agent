@@ -326,7 +326,7 @@ class ReportManager {
     if (!hasNotes) {
       report += `🟢 No risks or blockers today\n`;
     }
-    report += '\n';
+    report += '\n*************\n\n';
 
     return report;
   }
