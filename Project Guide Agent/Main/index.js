@@ -136,41 +136,40 @@ function maskToken(token) {
 }
 
 function getJiraClient(projectName = null) {
-  // Resolve which project's credentials to use:
-  // 1. Explicitly requested project (via arg)
-  // 2. Active project from config
-  // 3. Flat legacy credentials
-  // 4. Environment variables
-  const targetProject = projectName || config.jira.active_project;
-  let url, email, token;
+  // Resolve credential source by priority:
+  // 1. Project-specific config (stored credentials)
+  // 2. Global flat config (legacy)
+  // 3. Environment variables (only used as fallback)
 
+  const targetProject = projectName || config.jira.active_project;
+  let url = null, email = null, token = null;
+
+  // Use stored project credentials if found
   if (targetProject && config.jira.projects && config.jira.projects[targetProject]) {
     ({ url, email, token } = config.jira.projects[targetProject]);
   } else {
+    // Legacy mapping
     url = config.jira.url;
     email = config.jira.email;
     token = config.jira.token;
   }
 
-  // Environment variables override stored credentials
-  url = process.env.JIRA_URL || url;
-  email = process.env.JIRA_EMAIL || email;
-  token = process.env.JIRA_TOKEN || token;
+  // Fallback to environment variables if still missing parts
+  url = url || process.env.JIRA_URL;
+  email = email || process.env.JIRA_EMAIL;
+  token = token || process.env.JIRA_TOKEN;
 
   if (isTokenMasked(token)) {
     throw new ConfigError(
-      "Jira credentials are corrupted — the stored token is a masked placeholder. " +
-      "Please run 'configure_service' with service='jira' and provide your real API token."
+      "Jira credentials are corrupted — stored token is masked. Run 'configure_service' with service='jira' to fix."
     );
   }
+
   if (!url || !email || !token) {
     const missing = [!url && 'url', !email && 'email', !token && 'token'].filter(Boolean).join(', ');
-    const projectHint = targetProject ? ` for project '${targetProject}'` : '';
-    throw new ConfigError(
-      `Jira not fully configured${projectHint} (missing: ${missing}). ` +
-      "Run 'configure_service' with service='jira', url, email, and token."
-    );
+    throw new ConfigError(`Jira not fully configured (missing: ${missing}). Run 'configure_service' with service='jira'.`);
   }
+
   return new JiraClient(url, email, token);
 }
 

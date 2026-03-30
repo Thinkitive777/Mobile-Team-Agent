@@ -13,12 +13,16 @@ class ReportManager {
     if (!fs.existsSync(this.REPORTS_DIR)) {
       fs.mkdirSync(this.REPORTS_DIR, { recursive: true, mode: 0o700 });
     }
+    if (!fs.existsSync(this.DESKTOP_UPDATES_DIR)) {
+      fs.mkdirSync(this.DESKTOP_UPDATES_DIR, { recursive: true, mode: 0o700 });
+    }
   }
 
   // ── Project-based Desktop storage ─────────────────────────────────────
 
   static getProjectDir(projectName) {
-    const safe = projectName.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    const proj = projectName || 'General';
+    const safe = proj.replace(/[^a-zA-Z0-9_\-]/g, '_');
     const dir = path.join(this.DESKTOP_UPDATES_DIR, safe);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
