@@ -338,11 +338,6 @@ class WorkflowSkill extends BaseSkill {
 
         const completedTickets = allTickets.filter(t => t.statusCategory === "Done" || t.status === "Done");
 
-        // Early exit if nothing to report
-        if (commits.length === 0 && completedTickets.length === 0 && !gitError && !jiraError) {
-          return this.textResponse("No updates for today. Would you like to pick up a task?");
-        }
-
         // Group completed tickets by project key (e.g. "CMDN" from "CMDN-123")
         const ticketsByProject = {};
         for (const t of completedTickets) {
@@ -394,6 +389,10 @@ class WorkflowSkill extends BaseSkill {
 
         if (jiraError) content += `> Note: Jira unavailable — ${jiraError}\n\n`;
         if (gitError) content += `> Note: Git unavailable — ${gitError}\n\n`;
+
+        if (allProjects.length === 0) {
+          content += `No updates for today.\n`;
+        }
 
         for (const proj of allProjects) {
           const projTickets = ticketsByProject[proj] || [];
