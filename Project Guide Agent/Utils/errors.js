@@ -1,7 +1,7 @@
-/**
- * Structured error classes for ProjectGuide Agent.
- * Each error carries a machine-readable code and optional details.
- */
+/// MARK: - Error Classes
+/// Structured error hierarchy for ProjectGuide Agent.
+/// Each error carries a machine-readable code and optional details for
+/// Jira, Git, config, and validation failures.
 
 class AppError extends Error {
   constructor(message, code = 'APP_ERROR', details = null) {

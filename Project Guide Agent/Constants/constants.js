@@ -1,10 +1,9 @@
+/// MARK: - Constants
+/// Centralized configuration constants for ProjectGuide Agent.
+/// All magic numbers, file paths, API defaults, and regex patterns live here.
+
 const path = require('path');
 const os = require('os');
-
-/**
- * Centralized configuration constants for ProjectGuide Agent.
- * All magic numbers and configurable values live here.
- */
 module.exports = Object.freeze({
   // Version
   VERSION: '3.1.0',

@@ -1,3 +1,7 @@
+/// MARK: - Skill Registry
+/// Central registry that collects all skill instances, aggregates their tools,
+/// routes tool calls to the correct skill, and merges prompt chunks.
+
 const Logger = require("../Utils/logger");
 const fs = require("fs");
 const path = require("path");

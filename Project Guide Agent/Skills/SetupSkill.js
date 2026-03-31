@@ -1,3 +1,7 @@
+/// MARK: - Setup Skill
+/// Handles agent activation, connection configuration, health checks,
+/// project switching, and user preference management.
+
 const BaseSkill = require("./Core/BaseSkill");
 const { validate, serviceSchema, jiraUrlSchema, emailSchema } = require("../Utils/validators");
 const CONST = require("../Constants/constants");
@@ -78,14 +82,6 @@ class SetupSkill extends BaseSkill {
         },
       }
     ];
-  }
-
-  textResponse(msg) {
-    return { content: [{ type: "text", text: msg }] };
-  }
-
-  errorResponse(msg) {
-    return { content: [{ type: "text", text: msg }], isError: true };
   }
 
   async handleTool(name, args, context) {

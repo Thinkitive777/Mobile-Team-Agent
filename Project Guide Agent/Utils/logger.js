@@ -1,7 +1,7 @@
-/**
- * Minimal structured logger for ProjectGuide Agent.
- * All output goes to stderr since MCP uses stdout for protocol messages.
- */
+/// MARK: - Logger
+/// Minimal structured JSON logger for ProjectGuide Agent.
+/// All output goes to stderr since MCP uses stdout for protocol messages.
+/// Automatically redacts sensitive fields (token, password, secret).
 
 const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 

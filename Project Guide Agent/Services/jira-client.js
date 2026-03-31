@@ -1,3 +1,7 @@
+/// MARK: - Jira Client
+/// HTTP client for the Jira Cloud REST API. Handles authentication, retries,
+/// rate limiting, ADF parsing, and all CRUD operations on tickets/projects/sprints.
+
 const {
   JIRA_MAX_RESULTS, JIRA_REQUEST_TIMEOUT_MS,
   JIRA_MAX_RETRIES, JIRA_RETRY_BASE_DELAY_MS,

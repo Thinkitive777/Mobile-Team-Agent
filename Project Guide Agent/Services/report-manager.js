@@ -1,3 +1,7 @@
+/// MARK: - Report Manager
+/// Generates, saves, and retrieves daily/weekly reports and consolidated summaries.
+/// Manages both internal report storage and Desktop project-based update files.
+
 const fs = require('fs');
 const path = require('path');
 

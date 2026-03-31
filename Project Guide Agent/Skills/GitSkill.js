@@ -1,3 +1,6 @@
+/// MARK: - Git Skill
+/// Exposes git commit history with automatic Jira ticket linking.
+
 const BaseSkill = require("./Core/BaseSkill");
 const GitUtils = require("../Utils/git-utils");
 const CONST = require("../Constants/constants");
@@ -21,10 +24,6 @@ class GitSkill extends BaseSkill {
         },
       }
     ];
-  }
-
-  textResponse(msg) {
-    return { content: [{ type: "text", text: msg }] };
   }
 
   async handleTool(name, args, context) {

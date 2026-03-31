@@ -1,16 +1,11 @@
+/// MARK: - Jira Read Skill
+/// Read-only Jira operations: ticket search, details, workload analysis,
+/// project/sprint listing, ticket suggestions, and flexible list queries.
+
 const BaseSkill = require("./Core/BaseSkill");
 const { validate, ticketKeySchema } = require("../Utils/validators");
 const CONST = require("../Constants/constants");
-
-function isTicketBlocked(ticket) {
-  const nameBlocked = (ticket.summary + ' ' + ticket.status).toLowerCase().includes('blocked');
-  const labelBlocked = (ticket.labels || []).some(l => l.toLowerCase() === 'blocked');
-  const linkBlocked = (ticket.issueLinks || []).some(link =>
-    link.description?.toLowerCase().includes('is blocked by') &&
-    link.linkedStatus !== 'Done'
-  );
-  return nameBlocked || labelBlocked || linkBlocked;
-}
+const { isTicketBlocked } = require("../Utils/ticket-utils");
 
 class JiraReadSkill extends BaseSkill {
   constructor() {
@@ -130,14 +125,6 @@ class JiraReadSkill extends BaseSkill {
         },
       }
     ];
-  }
-
-  textResponse(msg) {
-    return { content: [{ type: "text", text: msg }] };
-  }
-
-  errorResponse(msg) {
-    return { content: [{ type: "text", text: msg }], isError: true };
   }
 
   async handleTool(name, args, context) {

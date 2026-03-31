@@ -1,3 +1,7 @@
+/// MARK: - Jira Write Skill
+/// Write operations for Jira: status transitions, comments, assignments,
+/// ticket creation, work logging, and user search. Supports offline queuing.
+
 const BaseSkill = require("./Core/BaseSkill");
 const { validate, ticketKeySchema } = require("../Utils/validators");
 const OfflineQueue = require("../Services/offline-queue");
@@ -105,14 +109,6 @@ class JiraWriteSkill extends BaseSkill {
         },
       }
     ];
-  }
-
-  textResponse(msg) {
-    return { content: [{ type: "text", text: msg }] };
-  }
-
-  errorResponse(msg) {
-    return { content: [{ type: "text", text: msg }], isError: true };
   }
 
   async handleTool(name, args, context) {

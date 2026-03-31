@@ -1,3 +1,7 @@
+/// MARK: - Workflow Skill
+/// Daily workflow automations: morning standup, end-of-day reports,
+/// daily/weekly summaries, and consolidated cross-project summaries.
+
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -75,14 +79,6 @@ class WorkflowSkill extends BaseSkill {
         },
       },
     ];
-  }
-
-  textResponse(msg) {
-    return { content: [{ type: "text", text: msg }] };
-  }
-
-  errorResponse(msg) {
-    return { content: [{ type: "text", text: msg }], isError: true };
   }
 
   async handleTool(name, args, context) {

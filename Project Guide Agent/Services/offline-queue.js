@@ -1,3 +1,7 @@
+/// MARK: - Offline Queue
+/// Persists Jira write actions that failed due to network errors.
+/// Actions are stored on disk and replayed when connectivity is restored.
+
 const fs = require('fs');
 const path = require('path');
 const CONST = require('../Constants/constants');

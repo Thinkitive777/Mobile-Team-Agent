@@ -1,3 +1,7 @@
+/// MARK: - Legacy Skill
+/// Handles offline action sync and the run_skill routing shim for
+/// backward compatibility with older skill-based invocations.
+
 const BaseSkill = require("./Core/BaseSkill");
 const OfflineQueue = require("../Services/offline-queue");
 const { JiraNetworkError } = require("../Utils/errors");
@@ -29,14 +33,6 @@ class LegacySkill extends BaseSkill {
         },
       }
     ];
-  }
-
-  textResponse(msg) {
-    return { content: [{ type: "text", text: msg }] };
-  }
-
-  errorResponse(msg) {
-    return { content: [{ type: "text", text: msg }], isError: true };
   }
 
   async handleTool(name, args, context) {

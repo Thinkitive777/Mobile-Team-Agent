@@ -1,3 +1,7 @@
+/// MARK: - Base Skill
+/// Abstract base class for all skills. Provides shared response helpers,
+/// tool registration interface, prompt loading, and the handleTool contract.
+
 const fs = require("fs");
 const path = require("path");
 
@@ -19,6 +23,20 @@ class BaseSkill {
    */
   hasTool(name) {
     return this.getTools().some(tool => tool.name === name);
+  }
+
+  /**
+   * Build a successful text response in MCP content format.
+   */
+  textResponse(msg) {
+    return { content: [{ type: "text", text: msg }] };
+  }
+
+  /**
+   * Build an error response in MCP content format.
+   */
+  errorResponse(msg) {
+    return { content: [{ type: "text", text: msg }], isError: true };
   }
 
   /**

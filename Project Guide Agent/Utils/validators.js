@@ -1,7 +1,6 @@
-/**
- * Input validation schemas using Zod.
- * Validates all external inputs before processing.
- */
+/// MARK: - Validators
+/// Zod-based input validation schemas for all external inputs:
+/// ticket keys, dates, service names, URLs, and email addresses.
 const { z } = require('zod');
 
 const ticketKeySchema = z.string()

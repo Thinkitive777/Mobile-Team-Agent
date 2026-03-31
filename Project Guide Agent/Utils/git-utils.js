@@ -1,3 +1,7 @@
+/// MARK: - Git Utilities
+/// Shell-safe git operations: commit fetching, ticket ID extraction,
+/// commit-to-ticket linking, and commit statistics.
+
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 
