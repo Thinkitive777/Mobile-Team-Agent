@@ -481,7 +481,9 @@ class FigmaSkill extends BaseSkill {
 
         if (refresh || !cache || !Array.isArray(cache.missing)) {
           const client = getFigmaClient();
-          const file = await client.getFile(fileKey);
+          // refresh=true must bypass the in-memory file cache too, otherwise
+          // "re-scan the project" would still read a stale file payload.
+          const file = await client.getFile(fileKey, { forceRefresh: refresh });
           const screens = client.extractScreens(file.document);
           if (screens.length === 0) {
             return this.textResponse(

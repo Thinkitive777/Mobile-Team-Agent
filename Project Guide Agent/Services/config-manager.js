@@ -168,6 +168,13 @@ function getJiraClient(projectName = null) {
 }
 
 // ── Figma Client Factory ───────────────────────────────────────────────
+// Memoize the client per token. Without this, every tool call constructed
+// a fresh FigmaClient and threw away any in-flight/dedup state — turning
+// the in-memory caches in figma-client.js into the only thing keeping the
+// agent under Figma's rate limit.
+
+let _figmaClient = null;
+let _figmaClientToken = null;
 
 function getFigmaClient() {
   const token = (config.figma && config.figma.token) || process.env.FIGMA_TOKEN;
@@ -181,7 +188,10 @@ function getFigmaClient() {
       "Figma not configured (missing token). Run 'configure_figma' with your personal access token from https://www.figma.com/developers/api#access-tokens"
     );
   }
-  return new FigmaClient(token);
+  if (_figmaClient && _figmaClientToken === token) return _figmaClient;
+  _figmaClient = new FigmaClient(token);
+  _figmaClientToken = token;
+  return _figmaClient;
 }
 
 // ── Repo Path ──────────────────────────────────────────────────────────

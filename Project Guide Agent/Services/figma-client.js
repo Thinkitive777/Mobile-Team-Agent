@@ -21,6 +21,78 @@ const RETRY_BASE_DELAY_MS = 1000;
 // want to block the agent for more than this many seconds.
 const MAX_RETRY_AFTER_SEC = 30;
 
+// ── Module-level caches + request dedup ──────────────────────────────────
+// These live on the module (not the instance) so caching survives across
+// the per-tool-call `new FigmaClient(...)` constructions in config-manager.
+// TTLs are conservative — Figma files do change, but not faster than the
+// agent re-reads them within a single session.
+const FILE_CACHE_TTL_MS = 5 * 60 * 1000;
+const NODES_CACHE_TTL_MS = 5 * 60 * 1000;
+const IMAGE_CACHE_TTL_MS = 5 * 60 * 1000;
+
+const _fileCache = new Map();   // fileKey -> { value, expires }
+const _nodesCache = new Map();  // `${fileKey}:${idsKey}` -> { value, expires }
+const _imageCache = new Map();  // `${fileKey}:${idsKey}:${fmt}:${scale}` -> { value, expires }
+
+// Inflight Promise maps — concurrent identical requests share one network
+// round-trip instead of independently hitting Figma.
+const _fileInflight = new Map();
+const _nodesInflight = new Map();
+const _imageInflight = new Map();
+
+function _cacheGet(map, key) {
+  const entry = map.get(key);
+  if (!entry) return null;
+  if (entry.expires < Date.now()) {
+    map.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function _cacheSet(map, key, value, ttl) {
+  map.set(key, { value, expires: Date.now() + ttl });
+}
+
+function _dedupe(inflightMap, key, fn) {
+  const existing = inflightMap.get(key);
+  if (existing) return existing;
+  const promise = (async () => {
+    try {
+      return await fn();
+    } finally {
+      inflightMap.delete(key);
+    }
+  })();
+  inflightMap.set(key, promise);
+  return promise;
+}
+
+/**
+ * Walk a previously-fetched Figma document tree and locate a node by id.
+ * Used to satisfy `getNodes` from a cached file response without paying
+ * for a second `/nodes` API call.
+ */
+function findNodeInDocument(documentNode, nodeId) {
+  if (!documentNode || !nodeId) return null;
+  const stack = [documentNode];
+  while (stack.length > 0) {
+    const n = stack.pop();
+    if (!n) continue;
+    if (n.id === nodeId) return n;
+    if (Array.isArray(n.children)) {
+      for (const c of n.children) stack.push(c);
+    }
+  }
+  return null;
+}
+
+function clearFigmaCache() {
+  _fileCache.clear();
+  _nodesCache.clear();
+  _imageCache.clear();
+}
+
 /**
  * Extract a file key from any Figma URL or return the input if it already
  * looks like a key. Supports /file/<key>/, /design/<key>/, /proto/<key>/.
@@ -160,8 +232,12 @@ class FigmaClient {
   /**
    * Fetch a Figma file's structure. Returns the raw document tree along with
    * extracted top-level frames (screens) for convenient consumption.
+   *
+   * Cached in-memory for FILE_CACHE_TTL_MS. Concurrent calls for the same
+   * file key share one network round-trip. Pass `forceRefresh: true` to
+   * bypass the cache (used by `suggest_figma_screens refresh=true`).
    */
-  async getFile(fileKeyOrUrl) {
+  async getFile(fileKeyOrUrl, { forceRefresh = false } = {}) {
     const fileKey = extractFileKey(fileKeyOrUrl);
     if (!fileKey) {
       throw new FigmaConnectionError(
@@ -169,17 +245,28 @@ class FigmaClient {
         `Provide either the file key or a URL like https://www.figma.com/file/<key>/...`
       );
     }
-    Logger.debug('Fetching Figma file', { fileKey });
-    const response = await this._fetchWithRetry(`${FIGMA_API_BASE}/files/${encodeURIComponent(fileKey)}`);
-    const data = await response.json();
-    return {
-      key: fileKey,
-      name: data.name || 'Untitled',
-      lastModified: data.lastModified || null,
-      version: data.version || null,
-      thumbnailUrl: data.thumbnailUrl || null,
-      document: data.document || null,
-    };
+    if (!forceRefresh) {
+      const cached = _cacheGet(_fileCache, fileKey);
+      if (cached) {
+        Logger.debug('Figma file cache hit', { fileKey });
+        return cached;
+      }
+    }
+    return _dedupe(_fileInflight, fileKey, async () => {
+      Logger.debug('Fetching Figma file', { fileKey });
+      const response = await this._fetchWithRetry(`${FIGMA_API_BASE}/files/${encodeURIComponent(fileKey)}`);
+      const data = await response.json();
+      const out = {
+        key: fileKey,
+        name: data.name || 'Untitled',
+        lastModified: data.lastModified || null,
+        version: data.version || null,
+        thumbnailUrl: data.thumbnailUrl || null,
+        document: data.document || null,
+      };
+      _cacheSet(_fileCache, fileKey, out, FILE_CACHE_TTL_MS);
+      return out;
+    });
   }
 
   /**
@@ -215,6 +302,14 @@ class FigmaClient {
    * Fetch one or more specific nodes from a Figma file by id. Returns the
    * raw node objects keyed by id. Use this to read a single screen's full
    * subtree (text, fills, layout, children) without paying for the entire file.
+   *
+   * Caching strategy:
+   *   1. Check the per-id nodes cache.
+   *   2. If the parent file is already cached in memory, satisfy the request
+   *      locally — `/v1/files` returns the full document tree with every
+   *      property `summarizeNodeTree` reads, so the extra `/nodes` round-trip
+   *      is pure waste in the common screen-read path.
+   *   3. Otherwise dedupe and fetch.
    */
   async getNodes(fileKeyOrUrl, nodeIds) {
     const fileKey = extractFileKey(fileKeyOrUrl);
@@ -225,23 +320,60 @@ class FigmaClient {
     if (ids.length === 0) {
       throw new FigmaConnectionError('getNodes requires at least one node id');
     }
-    const idParam = ids.map((id) => encodeURIComponent(id)).join(',');
-    Logger.debug('Fetching Figma nodes', { fileKey, ids });
-    const response = await this._fetchWithRetry(
-      `${FIGMA_API_BASE}/files/${encodeURIComponent(fileKey)}/nodes?ids=${idParam}&geometry=paths`
-    );
-    const data = await response.json();
-    return {
-      key: fileKey,
-      name: data.name || 'Untitled',
-      lastModified: data.lastModified || null,
-      nodes: data.nodes || {},
-    };
+    const idsKey = ids.slice().sort().join(',');
+    const cacheKey = `${fileKey}:${idsKey}`;
+
+    const cached = _cacheGet(_nodesCache, cacheKey);
+    if (cached) {
+      Logger.debug('Figma nodes cache hit', { fileKey, ids });
+      return cached;
+    }
+
+    // Short-circuit: serve from a cached full-file response when possible.
+    const cachedFile = _cacheGet(_fileCache, fileKey);
+    if (cachedFile && cachedFile.document) {
+      const nodes = {};
+      let allFound = true;
+      for (const id of ids) {
+        const node = findNodeInDocument(cachedFile.document, id);
+        if (!node) { allFound = false; break; }
+        nodes[id] = { document: node };
+      }
+      if (allFound) {
+        const synthetic = {
+          key: fileKey,
+          name: cachedFile.name,
+          lastModified: cachedFile.lastModified,
+          nodes,
+        };
+        _cacheSet(_nodesCache, cacheKey, synthetic, NODES_CACHE_TTL_MS);
+        Logger.debug('Figma nodes served from cached file', { fileKey, ids });
+        return synthetic;
+      }
+    }
+
+    return _dedupe(_nodesInflight, cacheKey, async () => {
+      const idParam = ids.map((id) => encodeURIComponent(id)).join(',');
+      Logger.debug('Fetching Figma nodes', { fileKey, ids });
+      const response = await this._fetchWithRetry(
+        `${FIGMA_API_BASE}/files/${encodeURIComponent(fileKey)}/nodes?ids=${idParam}&geometry=paths`
+      );
+      const data = await response.json();
+      const out = {
+        key: fileKey,
+        name: data.name || 'Untitled',
+        lastModified: data.lastModified || null,
+        nodes: data.nodes || {},
+      };
+      _cacheSet(_nodesCache, cacheKey, out, NODES_CACHE_TTL_MS);
+      return out;
+    });
   }
 
   /**
-   * Render one or more nodes to image URLs (the URLs are temporary signed
-   * S3 links from Figma — caller should download or use them immediately).
+   * Render one or more nodes to image URLs. Figma signs the URLs for ~30
+   * days, so we cache the response for IMAGE_CACHE_TTL_MS to avoid paying
+   * for the same render on every screen re-read.
    */
   async getImageUrls(fileKeyOrUrl, nodeIds, { format = 'png', scale = 2 } = {}) {
     const fileKey = extractFileKey(fileKeyOrUrl);
@@ -250,19 +382,32 @@ class FigmaClient {
     }
     const ids = Array.isArray(nodeIds) ? nodeIds : [nodeIds];
     if (ids.length === 0) return {};
-    const idParam = ids.map((id) => encodeURIComponent(id)).join(',');
     const safeFormat = ['png', 'jpg', 'svg', 'pdf'].includes(format) ? format : 'png';
     const safeScale = Math.min(Math.max(Number(scale) || 1, 1), 4);
-    const url =
-      `${FIGMA_API_BASE}/images/${encodeURIComponent(fileKey)}` +
-      `?ids=${idParam}&format=${safeFormat}&scale=${safeScale}`;
-    Logger.debug('Fetching Figma image URLs', { fileKey, ids, format: safeFormat, scale: safeScale });
-    const response = await this._fetchWithRetry(url);
-    const data = await response.json();
-    if (data.err) {
-      throw new FigmaConnectionError(`Figma image render failed: ${data.err}`);
+    const idsKey = ids.slice().sort().join(',');
+    const cacheKey = `${fileKey}:${idsKey}:${safeFormat}:${safeScale}`;
+
+    const cached = _cacheGet(_imageCache, cacheKey);
+    if (cached) {
+      Logger.debug('Figma image cache hit', { fileKey, ids });
+      return cached;
     }
-    return data.images || {};
+
+    return _dedupe(_imageInflight, cacheKey, async () => {
+      const idParam = ids.map((id) => encodeURIComponent(id)).join(',');
+      const url =
+        `${FIGMA_API_BASE}/images/${encodeURIComponent(fileKey)}` +
+        `?ids=${idParam}&format=${safeFormat}&scale=${safeScale}`;
+      Logger.debug('Fetching Figma image URLs', { fileKey, ids, format: safeFormat, scale: safeScale });
+      const response = await this._fetchWithRetry(url);
+      const data = await response.json();
+      if (data.err) {
+        throw new FigmaConnectionError(`Figma image render failed: ${data.err}`);
+      }
+      const images = data.images || {};
+      _cacheSet(_imageCache, cacheKey, images, IMAGE_CACHE_TTL_MS);
+      return images;
+    });
   }
 }
 
@@ -437,3 +582,5 @@ module.exports.extractFileKey = extractFileKey;
 module.exports.figmaColorToHex = figmaColorToHex;
 module.exports.summarizePaints = summarizePaints;
 module.exports.summarizeNodeTree = summarizeNodeTree;
+module.exports.findNodeInDocument = findNodeInDocument;
+module.exports.clearFigmaCache = clearFigmaCache;
