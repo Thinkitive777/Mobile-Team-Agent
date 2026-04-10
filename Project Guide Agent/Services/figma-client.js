@@ -15,6 +15,11 @@ const FIGMA_API_BASE = 'https://api.figma.com/v1';
 const REQUEST_TIMEOUT_MS = 15000;
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 1000;
+// Hard cap on how long we'll honor a `retry-after` from Figma. Figma's
+// cost-based rate limiter has been observed returning values that are
+// either bogus or expressed as wall-clock timestamps; either way we never
+// want to block the agent for more than this many seconds.
+const MAX_RETRY_AFTER_SEC = 30;
 
 /**
  * Extract a file key from any Figma URL or return the input if it already
@@ -61,8 +66,22 @@ class FigmaClient {
 
         // Rate limit
         if (response.status === 429) {
-          const retrySec = parseInt(response.headers.get('retry-after') || '5', 10);
-          Logger.warn('Figma rate limited', { attempt, retrySec });
+          const rawRetry = parseInt(response.headers.get('retry-after') || '5', 10);
+          // Figma occasionally returns nonsensical retry-after values (huge
+          // numbers, possibly Unix timestamps). Cap to a hard ceiling so the
+          // agent never blocks for more than MAX_RETRY_AFTER_SEC.
+          const retrySec = Number.isFinite(rawRetry) && rawRetry > 0
+            ? Math.min(rawRetry, MAX_RETRY_AFTER_SEC)
+            : 5;
+          Logger.warn('Figma rate limited', { attempt, rawRetry, willWaitSec: retrySec });
+          // If the server is asking for an absurd wait, give up immediately —
+          // retrying won't help and the user will get a clear error instead
+          // of an apparent hang.
+          if (rawRetry > MAX_RETRY_AFTER_SEC * 4) {
+            throw new FigmaRateLimitError(
+              `Figma API rate limit exceeded (server requested ${rawRetry}s wait). Try again in a minute.`
+            );
+          }
           if (attempt < retries) {
             await this._sleep(retrySec * 1000);
             continue;

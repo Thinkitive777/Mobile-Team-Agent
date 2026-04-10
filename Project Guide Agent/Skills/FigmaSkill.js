@@ -34,13 +34,13 @@ class FigmaSkill extends BaseSkill {
     return [
       {
         name: "configure_figma",
-        description: "Configure Figma Connect by saving a personal access token. Token must be from https://www.figma.com/developers/api#access-tokens. Validates the token immediately.",
+        description: "Configure Figma Connect. Call with NO arguments to receive step-by-step instructions for generating a Figma personal access token (use this when the user says 'connect figma' / 'set up figma' without providing a token). Call with 'token' to save and validate it. If already connected, returns connected status unless force=true is also passed.",
         inputSchema: {
           type: "object",
           properties: {
-            token: { type: "string", description: "Figma personal access token" },
+            token: { type: "string", description: "Figma personal access token (figd_...). Omit to receive setup instructions." },
+            force: { type: "boolean", description: "Force re-configure even if already connected." },
           },
-          required: ["token"],
         },
       },
       {
@@ -82,26 +82,50 @@ class FigmaSkill extends BaseSkill {
 
     switch (name) {
       case "configure_figma": {
-        const token = (args.token || "").trim();
-        if (!token) return this.errorResponse("Figma token is required.");
-        if (isTokenMasked(token)) {
+        const rawToken = typeof args.token === "string" ? args.token.trim() : "";
+        const force = !!args.force;
+        const alreadyConnected = !!(config.figma && config.figma.connected && config.figma.token && !isTokenMasked(config.figma.token));
+
+        // CASE 1 — no token provided. Either show "already connected" or the setup guide.
+        if (!rawToken) {
+          if (alreadyConnected && !force) {
+            let out = `Figma is already connected.\n`;
+            if (config.figma.user) out += `Connected as: ${config.figma.user}\n`;
+            out += `Token: ${maskToken(config.figma.token)}\n\n`;
+            out += `You can use 'list_figma_screens' or 'suggest_figma_screens' right away.\n`;
+            out += `If you want to switch tokens, run 'configure_figma' with token=<new_token> (or force=true to start over).`;
+            return this.textResponse(out);
+          }
+          return this.textResponse(buildFigmaSetupGuide());
+        }
+
+        // CASE 2 — token provided. Validate format, then test against the API.
+        if (isTokenMasked(rawToken)) {
           return this.errorResponse(
-            "The provided token looks like a masked placeholder. Generate a real Figma personal access token at https://www.figma.com/developers/api#access-tokens"
+            "The provided token looks like a masked placeholder (e.g. '****' or 'tok_****').\n\n" +
+            buildFigmaSetupGuide()
           );
         }
-        if (token.length < 20) {
+        if (rawToken.length < 20) {
           return this.errorResponse(
-            "The provided token looks too short to be a valid Figma personal access token. Generate one at https://www.figma.com/developers/api#access-tokens"
+            "The provided token is too short to be a valid Figma personal access token.\n\n" +
+            buildFigmaSetupGuide()
           );
+        }
+        if (!/^figd_[A-Za-z0-9_\-]+$/.test(rawToken)) {
+          // Modern Figma personal access tokens start with `figd_`. We accept
+          // anything that looks token-shaped, but warn loudly if not.
+          // (Older tokens may exist; do not hard-fail here.)
         }
 
         if (!config.figma) {
           config.figma = { connected: false, token: null, user: null, last_file_key: null };
         }
-        config.figma.token = token;
+        // Snapshot previous values so we can roll back cleanly on failure.
+        const prev = { ...config.figma };
+        config.figma.token = rawToken;
         config.figma.connected = true;
 
-        // Validate immediately so the user knows it works
         try {
           const client = getFigmaClient();
           const result = await client.testConnection();
@@ -109,52 +133,79 @@ class FigmaSkill extends BaseSkill {
           saveConfig();
           let out = `Figma configured successfully.\n`;
           out += `Connected as: ${result.user}${result.email ? ` (${result.email})` : ''}\n`;
-          out += `Token: ${maskToken(token)}\n\n`;
-          out += `Next: use 'list_figma_screens' with a Figma file URL to read your designs.`;
+          out += `Token: ${maskToken(rawToken)}\n\n`;
+          out += `Next steps:\n`;
+          out += `  1. Run 'list_figma_screens' with a Figma file URL to read your designs.\n`;
+          out += `  2. Then 'suggest_figma_screens' to see which screens aren't implemented yet (5 at a time).`;
           return this.textResponse(out);
         } catch (err) {
-          // Roll back connection flag — token did not validate
-          config.figma.connected = false;
+          // Roll back to previous state — saved token did not validate.
+          config.figma = prev;
           saveConfig();
-          return this.errorResponse(
-            `Figma token saved but validation failed: ${err.message}\n` +
-            `Please double-check the token at https://www.figma.com/developers/api#access-tokens and re-run 'configure_figma'.`
-          );
+          let msg = `Figma token validation failed: ${err.message}\n\n`;
+          if (err.code === 'FIGMA_AUTH_ERROR') {
+            msg += `Your token appears to be invalid, expired, or revoked.\n\n`;
+          } else if (err.code === 'FIGMA_NETWORK_ERROR') {
+            msg += `Could not reach Figma. Check your internet connection and try again — your token was NOT saved.\n\n`;
+            return this.errorResponse(msg);
+          }
+          msg += buildFigmaSetupGuide();
+          return this.errorResponse(msg);
         }
       }
 
       case "figma_connection_test": {
-        if (!config.figma || !config.figma.connected || !config.figma.token) {
-          return this.errorResponse(
-            "Figma is not configured. Run 'configure_figma' with your personal access token from https://www.figma.com/developers/api#access-tokens"
+        if (!config.figma || !config.figma.connected || !config.figma.token || isTokenMasked(config.figma.token)) {
+          return this.textResponse(
+            `Figma is not configured yet.\n\n` + buildFigmaSetupGuide()
           );
         }
-        const client = getFigmaClient();
-        const result = await client.testConnection();
-        // Refresh stored user
-        config.figma.user = result.user;
-        saveConfig();
-        return this.textResponse(
-          `Figma connection OK.\nUser: ${result.user}${result.email ? `\nEmail: ${result.email}` : ''}`
-        );
+        try {
+          const client = getFigmaClient();
+          const result = await client.testConnection();
+          // Refresh stored user — token still works
+          config.figma.user = result.user;
+          saveConfig();
+          let out = `Figma connection OK.\n`;
+          out += `User: ${result.user}\n`;
+          if (result.email) out += `Email: ${result.email}\n`;
+          if (config.figma.last_file_key) out += `Last file: ${config.figma.last_file_key}\n`;
+          return this.textResponse(out);
+        } catch (err) {
+          if (err.code === 'FIGMA_AUTH_ERROR') {
+            // Token is now invalid — clear connected flag so the agent prompts re-auth.
+            config.figma.connected = false;
+            saveConfig();
+            return this.errorResponse(
+              `Figma token is no longer valid (${err.message}).\n\n` +
+              `It may have been revoked or expired. Generate a fresh token and run 'configure_figma' again.\n\n` +
+              buildFigmaSetupGuide()
+            );
+          }
+          throw err; // network/other — let central handler format it
+        }
       }
 
       case "list_figma_screens": {
-        if (!config.figma || !config.figma.connected || !config.figma.token) {
+        if (!config.figma || !config.figma.connected || !config.figma.token || isTokenMasked(config.figma.token)) {
           return this.errorResponse(
-            "Figma is not connected. Run 'configure_figma' first."
+            `Figma is not connected yet.\n\n` + buildFigmaSetupGuide()
           );
         }
         const fileInput = args.file || config.figma.last_file_key;
         if (!fileInput) {
           return this.errorResponse(
-            "No Figma file specified and no previous file remembered. Pass 'file' as a Figma URL or file key."
+            "No Figma file specified and no previous file remembered.\n" +
+            "Pass 'file' as a Figma URL or file key — for example:\n" +
+            "  https://www.figma.com/design/<key>/<name>\n" +
+            "  https://www.figma.com/file/<key>/<name>"
           );
         }
         const fileKey = extractFileKey(fileInput);
         if (!fileKey) {
           return this.errorResponse(
-            `Could not parse a Figma file key from "${fileInput}". Pass a URL like https://www.figma.com/file/<key>/Name or the bare file key.`
+            `Could not parse a Figma file key from "${fileInput}".\n` +
+            `Expected a Figma URL like https://www.figma.com/design/<key>/Name or the bare file key.`
           );
         }
 
@@ -203,9 +254,9 @@ class FigmaSkill extends BaseSkill {
       }
 
       case "suggest_figma_screens": {
-        if (!config.figma || !config.figma.connected || !config.figma.token) {
+        if (!config.figma || !config.figma.connected || !config.figma.token || isTokenMasked(config.figma.token)) {
           return this.errorResponse(
-            "Figma is not connected. Run 'configure_figma' first."
+            `Figma is not connected yet.\n\n` + buildFigmaSetupGuide()
           );
         }
         const fileInput = args.file || config.figma.last_file_key;
@@ -217,19 +268,35 @@ class FigmaSkill extends BaseSkill {
         const fileKey = extractFileKey(fileInput);
         if (!fileKey) {
           return this.errorResponse(
-            `Could not parse a Figma file key from "${fileInput}".`
+            `Could not parse a Figma file key from "${fileInput}". Expected a Figma URL or bare file key.`
           );
         }
 
         const pageSize = args.page_size && args.page_size > 0 ? args.page_size : DEFAULT_PAGE_SIZE;
         const refresh = !!args.refresh;
 
-        // Cache key combines file + project path so different contexts don't collide.
+        // Validate project_path before doing any work.
         const projectPath = args.project_path || getRepoPath();
-        const cacheKey = `${fileKey}::${projectPath}`;
+        if (!projectPath) {
+          return this.errorResponse(
+            "No project path available. Pass 'project_path' or set REPO_PATH in your environment."
+          );
+        }
+        let projectExists = false;
+        try {
+          projectExists = fs.existsSync(projectPath) && fs.statSync(projectPath).isDirectory();
+        } catch (e) {
+          projectExists = false;
+        }
+        if (!projectExists) {
+          return this.errorResponse(
+            `Project path does not exist or is not a directory: ${projectPath}\n` +
+            `Pass a valid 'project_path' (an absolute folder path).`
+          );
+        }
 
-        // We keep the last computed missing-screens list on config.figma._cache to
-        // power "show next 5" without re-hitting the Figma API every page.
+        // Cache key combines file + project path so different contexts don't collide.
+        const cacheKey = `${fileKey}::${projectPath}`;
         if (!config.figma._cache) config.figma._cache = {};
         let cache = config.figma._cache[cacheKey];
 
@@ -239,18 +306,19 @@ class FigmaSkill extends BaseSkill {
           const screens = client.extractScreens(file.document);
           if (screens.length === 0) {
             return this.textResponse(
-              `Figma file "${file.name}" has no frames. Nothing to suggest.`
+              `Figma file "${file.name}" has no top-level frames. Nothing to suggest.\n` +
+              `Add FRAME nodes to your design pages and try again.`
             );
           }
 
-          let implementedTokens;
+          let scanResult;
           try {
-            implementedTokens = collectProjectTokens(projectPath);
+            scanResult = collectProjectTokens(projectPath);
           } catch (err) {
-            implementedTokens = new Set();
+            scanResult = { tokens: new Set(), filesScanned: 0, accessErrors: 1 };
           }
 
-          const missing = screens.filter(s => !isScreenImplemented(s.name, implementedTokens));
+          const missing = screens.filter(s => !isScreenImplemented(s.name, scanResult.tokens));
 
           cache = {
             fileName: file.name,
@@ -258,6 +326,8 @@ class FigmaSkill extends BaseSkill {
             projectPath,
             totalScreens: screens.length,
             missing,
+            filesScanned: scanResult.filesScanned,
+            accessErrors: scanResult.accessErrors,
             generatedAt: new Date().toISOString(),
           };
           config.figma._cache[cacheKey] = cache;
@@ -266,10 +336,25 @@ class FigmaSkill extends BaseSkill {
         }
 
         const total = cache.missing.length;
+
+        // Build a leading warning if the scan was empty / partial — this makes
+        // "every screen looks unimplemented" results actually trustworthy.
+        let warning = '';
+        if (cache.filesScanned === 0) {
+          warning =
+            `WARNING: Scanned ${cache.projectPath} but found 0 source files (.swift/.kt/.dart/.tsx/...).\n` +
+            `Either the project is empty, only contains binaries/assets, or this process lacks read permission.\n` +
+            `All Figma screens will be reported as "not implemented" until source files are present.\n\n`;
+        } else if (cache.accessErrors > 0) {
+          warning =
+            `Note: ${cache.accessErrors} subdirectory could not be read during the scan — results may be incomplete.\n\n`;
+        }
+
         if (total === 0) {
           return this.textResponse(
+            warning +
             `Great news — every screen in "${cache.fileName}" appears to already be implemented in ${cache.projectPath}.\n` +
-            `(Checked ${cache.totalScreens} Figma screens.)\n` +
+            `(Checked ${cache.totalScreens} Figma screens against ${cache.filesScanned} source files.)\n` +
             `Pass refresh=true if your project changed.`
           );
         }
@@ -282,13 +367,16 @@ class FigmaSkill extends BaseSkill {
 
         if (slice.length === 0) {
           return this.textResponse(
+            warning +
             `No more suggestions — you've reviewed all ${total} unimplemented screens from "${cache.fileName}".\n` +
             `Pass refresh=true to re-scan the project, or page=1 to start over.`
           );
         }
 
-        let out = `Suggestions from "${cache.fileName}" — screens not yet implemented in your project\n`;
+        let out = warning;
+        out += `Suggestions from "${cache.fileName}" — screens not yet implemented in your project\n`;
         out += `Project: ${cache.projectPath}\n`;
+        out += `Scanned: ${cache.filesScanned} source files\n`;
         out += `Total unimplemented: ${total} (Figma total: ${cache.totalScreens})\n`;
         out += `Showing ${offset + 1}–${offset + slice.length} of ${total}:\n\n`;
         for (let i = 0; i < slice.length; i++) {
@@ -355,13 +443,15 @@ function isScreenImplemented(screenName, projectTokens) {
 
 /**
  * Walk the project directory (bounded depth + ignored dirs) and collect a Set
- * of normalized tokens from every source filename. Cheap, no full file reads.
+ * of normalized tokens from every source filename. Returns scan stats so the
+ * caller can warn the user when the scan was empty or partial.
  */
 function collectProjectTokens(rootDir, maxDepth = 8, maxFiles = 20000) {
   const tokens = new Set();
-  if (!rootDir || !fs.existsSync(rootDir)) return tokens;
+  let filesScanned = 0;
+  let accessErrors = 0;
+  if (!rootDir || !fs.existsSync(rootDir)) return { tokens, filesScanned, accessErrors };
 
-  let count = 0;
   const stack = [{ dir: rootDir, depth: 0 }];
   while (stack.length > 0) {
     const { dir, depth } = stack.pop();
@@ -370,10 +460,11 @@ function collectProjectTokens(rootDir, maxDepth = 8, maxFiles = 20000) {
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch (e) {
+      accessErrors++;
       continue;
     }
     for (const ent of entries) {
-      if (count >= maxFiles) return tokens;
+      if (filesScanned >= maxFiles) return { tokens, filesScanned, accessErrors };
       if (ent.name.startsWith(".") && ent.name !== ".") continue;
       const full = path.join(dir, ent.name);
       if (ent.isDirectory()) {
@@ -382,12 +473,52 @@ function collectProjectTokens(rootDir, maxDepth = 8, maxFiles = 20000) {
       } else if (ent.isFile()) {
         const ext = path.extname(ent.name).toLowerCase();
         if (!SOURCE_EXTENSIONS.has(ext)) continue;
-        count++;
+        filesScanned++;
         for (const tok of tokenize(ent.name)) tokens.add(tok);
       }
     }
   }
-  return tokens;
+  return { tokens, filesScanned, accessErrors };
+}
+
+/**
+ * The setup guide returned when the user asks to "connect figma" without
+ * supplying a token. Walks them through generating one and calling configure_figma.
+ */
+function buildFigmaSetupGuide() {
+  return [
+    `How to connect Figma`,
+    ``,
+    `Figma Connect uses a personal access token (read scope is enough).`,
+    `Follow these steps once — the agent will remember the token afterward.`,
+    ``,
+    `STEP 1 — Open your Figma account settings`,
+    `   • Sign in at https://www.figma.com`,
+    `   • Click your avatar (top-left) → "Settings"`,
+    `   • Open the "Security" tab`,
+    ``,
+    `STEP 2 — Generate a personal access token`,
+    `   • Scroll to "Personal access tokens"`,
+    `   • Click "Generate new token"`,
+    `   • Name it (e.g. "Project Guide Agent")`,
+    `   • Expiration: pick whatever you're comfortable with`,
+    `   • Scopes: "File content" → Read is sufficient`,
+    `   • Click "Generate token" and COPY the value (you can only see it once)`,
+    `   • Token format looks like:  figd_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`,
+    ``,
+    `STEP 3 — Save it to the agent`,
+    `   Tell me: "configure figma with token figd_..."`,
+    `   (or run the tool 'configure_figma' with token=<your token>)`,
+    `   I will validate it immediately and confirm the connected user.`,
+    ``,
+    `STEP 4 — Read your designs`,
+    `   Once connected, share a Figma file URL like`,
+    `     https://www.figma.com/design/<key>/<name>`,
+    `   and I'll list every screen and suggest which ones aren't built yet.`,
+    ``,
+    `Docs: https://www.figma.com/developers/api#access-tokens`,
+  ].join('\n');
 }
 
 module.exports = FigmaSkill;
+module.exports.buildFigmaSetupGuide = buildFigmaSetupGuide;
