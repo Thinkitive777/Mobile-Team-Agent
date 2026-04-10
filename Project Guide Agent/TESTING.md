@@ -643,3 +643,79 @@ mkdir -p ~/Desktop/testAgent && cd ~/Desktop/testAgent && git init
 | config manager | TEST 39 |
 | file headers | TEST 40 |
 | **all** | TEST 01–40 |
+
+---
+
+## Figma Connect — Live & Mocked Test Results
+
+Verified against Figma file `iOS - Practice App` (key `NSYiGQYsupMMc3VUHxQkuy`)
+and `~/Desktop/Demo Folder` on 2026-04-10. All 16 cases pass.
+
+| #  | Scenario                                                       | Result                                                              |
+|----|----------------------------------------------------------------|---------------------------------------------------------------------|
+| 1  | `configure_figma {}` (not connected)                           | Setup guide, `isError=false`                                        |
+| 2  | `figma_connection_test` (not configured)                       | Setup guide, `isError=false`                                        |
+| 3  | `list_figma_screens` (not configured)                          | Setup guide, `isError=true`                                         |
+| 4  | `configure_figma {token: "tooshort"}`                          | Validation error + setup guide                                      |
+| 5  | `configure_figma {token: real}`                                | Connected as Shekhar Manwar (live API)                              |
+| 6  | `configure_figma {}` after connect                             | "Already connected" status (no re-prompt)                           |
+| 7  | `configure_figma {force:true}` (no token)                      | Setup guide (lets user reconfigure)                                 |
+| 8  | `list_figma_screens` (real file)                               | 2 screens read from `iOS - Practice App`                            |
+| 9  | `suggest_figma_screens` against Demo Folder                    | Empty-scan WARNING + 2 suggestions                                  |
+| 10 | `suggest_figma_screens project_path=/tmp/none`                 | Clean error: "Project path does not exist"                          |
+| 11 | `suggest_figma_screens` with mock 1 matching file              | Correctly filtered Login Screen, returned 1 unimplemented           |
+| 12 | `suggest_figma_screens offset=999`                             | Cleanly returns "no more suggestions"                               |
+| 13 | Empty Figma file (no frames)                                   | Friendly "no top-level frames. Add FRAME nodes."                    |
+| 14 | Token revocation mid-session                                   | Auto-clears `connected=false`, asks for fresh token + guide         |
+| 15 | Bogus `retry-after: 397851` (≈110 hours)                       | Bails in <100 ms with `FIGMA_RATE_LIMIT` (instead of hanging)       |
+| 16 | Rollback on token validation failure                           | Previous token preserved, not overwritten                           |
+
+### Live verification snippets
+
+**Setup guide on first contact (Case 1)**
+```
+How to connect Figma
+
+Figma Connect uses a personal access token (read scope is enough).
+...
+STEP 1 — Open your Figma account settings
+   • Sign in at https://www.figma.com
+   • Click your avatar (top-left) → "Settings"
+   • Open the "Security" tab
+
+STEP 2 — Generate a personal access token
+   • Scroll to "Personal access tokens"
+   • Click "Generate new token"
+   • Scopes: "File content" → Read is sufficient
+   • Token format looks like:  figd_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+...
+```
+
+**Already-connected awareness (Case 6)**
+```
+Figma is already connected.
+Connected as: Shekhar Manwar
+Token: tok_****kEpV
+
+You can use 'list_figma_screens' or 'suggest_figma_screens' right away.
+```
+
+**Empty-scan warning (Case 9)**
+```
+WARNING: Scanned /Users/mac/Desktop/Demo Folder but found 0 source files
+(.swift/.kt/.dart/.tsx/...). Either the project is empty, only contains
+binaries/assets, or this process lacks read permission. All Figma screens
+will be reported as "not implemented" until source files are present.
+
+Suggestions from "iOS - Practice App"...
+Total unimplemented: 2 (Figma total: 2)
+```
+
+**Rate-limit hang fix (Case 15)** — bug found during live testing where
+Figma's `retry-after` header returned `397851` seconds (~110 hours). The
+client now caps the wait at 30 s and bails immediately on absurd values:
+```
+{"level":"warn","msg":"Figma rate limited","data":{"rawRetry":397601,"willWaitSec":30}}
+FIGMA_RATE_LIMIT Figma API rate limit exceeded (server requested 397601s wait). Try again in a minute.
+```
+Total time: <100 ms (was: ~110 hours).
