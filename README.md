@@ -4,22 +4,32 @@ An intelligent developer assistant that integrates Jira, Git, and daily workflow
 
 ## Quick Install
 
-**Prerequisites:** [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) must be installed.
+**Prerequisites:**
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
+- [Node.js 18+](https://nodejs.org/) and `npm`
+- `git`
 
 ### Mac / Linux
 ```bash
-mkdir projectguide-agent && cd projectguide-agent
-unzip ../projectguide-agent-dist.zip
+git clone https://github.com/Shekhar9398/Project-Guide-Claude-Agent.git
+cd Project-Guide-Claude-Agent/"Project Guide Agent"
 chmod +x install.sh && ./install.sh
 ```
 
 ### Windows
 ```
-1. Unzip projectguide-agent-dist.zip into a folder
-2. Double-click install.bat
+git clone https://github.com/Shekhar9398/Project-Guide-Claude-Agent.git
+cd Project-Guide-Claude-Agent\Project Guide Agent
+install.bat
 ```
 
-That's it. The agent is now available **globally** — works in any directory on your machine.
+That's it. The installer runs `npm install --production` for you, copies the
+source to `~/.projectguide-agent/`, and registers the MCP server globally —
+the agent is then available in any `claude` session on your machine.
+
+> The repo is source-only. There are no prebuilt binaries or distribution
+> zips checked in — `git clone` stays light and you always get the latest
+> code via `git pull`. To upgrade: `git pull && ./install.sh`.
 
 ## Usage
 
@@ -52,25 +62,19 @@ After invoking, connect your tools:
 ## How It Works
 
 The installer:
-1. Copies the agent binary to `~/.projectguide-agent/` (falls back to Node.js source if binary fails)
-2. Verifies the binary responds to MCP protocol before proceeding
-3. Registers the MCP server at **user scope** via `claude mcp add -s user` (writes to `~/.claude.json`)
-4. Verifies registration succeeded, with a direct `~/.claude.json` fallback if the CLI command fails
+1. Copies the agent source into `~/.projectguide-agent/src/`
+2. Runs `npm install --production` inside that directory
+3. Writes a small runner shim to `~/.projectguide-agent/bin/projectguide-agent`
+4. Registers the MCP server at **user scope** via `claude mcp add -s user` (writes to `~/.claude.json`)
 5. Installs agent instructions to `~/.claude/CLAUDE.md`
 
 This means any `claude` session in any directory will have access to the agent.
 
 ## Supported Platforms
 
-| Platform | Binary | Node.js Fallback |
-|----------|--------|-----------------|
-| macOS x64 (Intel) | Yes | Yes |
-| macOS arm64 (Apple Silicon) | Yes* | Yes |
-| Windows x64 | Yes | Yes |
-| Linux x64 | Yes | Yes |
-| Linux arm64 | Yes* | Yes |
-
-*ARM64 binaries included when built with `npm run build:all`. Falls back to Rosetta 2 (macOS) or Node.js if unavailable.
+Anywhere Node.js 18+ runs: macOS (Intel & Apple Silicon), Linux (x64 & arm64),
+and Windows. The MCP server is plain Node.js source — no platform-specific
+binaries or builds are required.
 
 ## Uninstall
 
@@ -88,31 +92,25 @@ This removes the binary, MCP registration from `~/.claude.json`, global CLAUDE.m
 
 ## For Developers
 
-### Build from source
+### Working on the agent
 ```bash
-cd "Project Guide Agent"
-npm install
-npm run validate        # Check all source files
-npm run build:all       # Build binaries for all platforms
-npm run build:dist      # Build + create distribution zip
+git clone https://github.com/Shekhar9398/Project-Guide-Claude-Agent.git
+cd Project-Guide-Claude-Agent/"Project Guide Agent"
+npm install                # full deps including pkg (devDependency)
+npm run validate           # syntax-check the core source files
+npm start                  # run the MCP server directly with node
 ```
 
-### Project structure
+### Optional — build standalone binaries
+Prebuilt binaries are **not** committed. Generate them locally only if you
+need them:
+```bash
+npm run build:all          # produces dist/ for all platforms (gitignored)
 ```
-Project Guide Agent/
-├── index.js              # MCP server (v2.1.0)
-├── jira-client.js        # Jira REST API client
-├── git-utils.js          # Git integration
-├── report-manager.js     # Report storage & generation
-├── constants.js          # Configuration
-├── errors.js             # Error classes
-├── logger.js             # Structured logging
-├── validators.js         # Zod input validation
-├── install.sh / .bat     # Platform installers
-├── uninstall.sh / .bat   # Platform uninstallers
-├── invoke / invoke.bat   # CLI wrapper scripts
-└── dist/                 # Pre-built binaries
-```
+
+### Repo hygiene
+`node_modules/`, `dist/`, and `*.zip` are gitignored. Never commit them — the
+repo is intentionally source-only so `git clone` stays fast.
 
 ## Version
 

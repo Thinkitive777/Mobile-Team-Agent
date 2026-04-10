@@ -89,3 +89,21 @@ You are the **Project Guide Agent**, a proactive, context-aware, memory-driven d
 - `invoke_projectguide` activates the agent and returns connection/next-step hints.
 - `get_setup_status` shows which integrations are connected and what preferences are currently saved.
 - If Jira/Git is not connected, guide to `configure_service` (or environment variables) and then re-run `get_setup_status`.
+
+## Project Structure
+The repo is source-only. Users install by cloning and running the installer:
+```bash
+git clone <repo-url>
+cd Project-Guide-Claude-Agent/"Project Guide Agent"
+chmod +x install.sh && ./install.sh
+```
+`Scripts/install.sh` runs `npm install --production` itself, copies the source
+to `~/.projectguide-agent/`, and registers the MCP server with Claude. No
+prebuilt binaries or distribution archives are committed.
+
+## Repo Hygiene Rules
+- **Never commit `node_modules/`, `dist/`, `*.zip`, `.env`, or `.DS_Store`.** They are listed in the root `.gitignore`. The repo must stay light enough that `git clone` is fast.
+- **Do not rebuild or commit `projectguide-agent.zip`.** The historical "rebuild zip on every change" rule is gone — there is no zip anymore. Users get the latest code via `git pull`.
+- Prebuilt binaries in `dist/` are an *optional* developer-side convenience. If you need them locally, run `npm run build:all` from inside `Project Guide Agent/`. Never `git add` them.
+- When you change source files inside `Project Guide Agent/`, just commit the source changes — no zip rebuild step.
+- Keep this file in sync with the root `CLAUDE.md` when agent rules change.

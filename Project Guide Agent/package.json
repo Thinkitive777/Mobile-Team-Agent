@@ -8,8 +8,6 @@
     "start": "node Main/index.js",
     "build": "pkg . --out-path dist/",
     "build:all": "pkg . --out-path dist/ -t node18-macos-x64,node18-macos-arm64,node18-win-x64,node18-linux-x64,node18-linux-arm64",
-    "build:dist": "npm run build:all && npm run zip",
-    "zip": "cd .. && zip -r projectguide-agent-dist.zip 'Project Guide Agent'/dist/ 'Project Guide Agent'/Scripts/install.sh 'Project Guide Agent'/Scripts/install.bat 'Project Guide Agent'/Scripts/uninstall.sh 'Project Guide Agent'/Scripts/uninstall.bat 'Project Guide Agent'/install.sh 'Project Guide Agent'/uninstall.sh 'Project Guide Agent'/Scripts/invoke 'Project Guide Agent'/Scripts/invoke.bat 'Project Guide Agent'/Skills/prompts/*.md 'Project Guide Agent'/Main/index.js 'Project Guide Agent'/Services/jira-client.js 'Project Guide Agent'/Utils/git-utils.js 'Project Guide Agent'/Services/report-manager.js 'Project Guide Agent'/Constants/constants.js 'Project Guide Agent'/Utils/errors.js 'Project Guide Agent'/Utils/logger.js 'Project Guide Agent'/Utils/validators.js 'Project Guide Agent'/Services/offline-queue.js 'Project Guide Agent'/package.json 'Project Guide Agent'/package-lock.json 'Project Guide Agent'/.env.example CLAUDE.md README.md install.sh install.bat uninstall.sh uninstall.bat",
     "validate": "node -c Main/index.js && node -c Services/jira-client.js && node -c Utils/git-utils.js && node -c Services/report-manager.js && node -c Constants/constants.js && node -c Utils/errors.js && node -c Utils/logger.js && node -c Utils/validators.js && node -c Services/offline-queue.js && echo 'All files valid'"
   },
   "pkg": {
