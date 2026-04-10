@@ -6,7 +6,7 @@
 const fs = require("fs");
 const path = require("path");
 const BaseSkill = require("./Core/BaseSkill");
-const { extractFileKey } = require("../Services/figma-client");
+const { extractFileKey, summarizeNodeTree } = require("../Services/figma-client");
 
 const DEFAULT_PAGE_SIZE = 5;
 
@@ -56,6 +56,21 @@ class FigmaSkill extends BaseSkill {
           properties: {
             file: { type: "string", description: "Figma file URL or file key. Optional if a file was used previously." },
             limit: { type: "number", description: "Max screens to display (default: 50)" },
+          },
+        },
+      },
+      {
+        name: "read_figma_screen",
+        description: "Read the FULL design contents of a single Figma screen/frame so the agent can faithfully recreate it in code. Returns a structured spec with text content, colors, fills, strokes, layout (auto-layout, padding, spacing), corner radii, child hierarchy, plus a rendered PNG URL of the screen. Use this BEFORE generating code for any Figma screen — `list_figma_screens` only returns names. Accepts the screen by name (substring match), node id (e.g. '1491:683'), or a Figma URL containing a node-id query parameter.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            screen: { type: "string", description: "Screen name (substring/case-insensitive match against frames in the file) OR a Figma node id like '1491:683'." },
+            file: { type: "string", description: "Figma file URL or file key. Optional if a file was used previously. If a Figma URL with ?node-id=... is passed here, that node id is used automatically." },
+            include_image: { type: "boolean", description: "Also return a rendered PNG URL of the screen (default: true)." },
+            image_scale: { type: "number", description: "Render scale for the PNG (1-4, default 2)." },
+            max_depth: { type: "number", description: "How deep to walk the node tree (default 12)." },
+            max_nodes: { type: "number", description: "Hard cap on nodes returned (default 400). Increase only if a screen is genuinely huge." },
           },
         },
       },
@@ -253,6 +268,170 @@ class FigmaSkill extends BaseSkill {
         return this.textResponse(out);
       }
 
+      case "read_figma_screen": {
+        if (!config.figma || !config.figma.connected || !config.figma.token || isTokenMasked(config.figma.token)) {
+          return this.errorResponse(
+            `Figma is not connected yet.\n\n` + buildFigmaSetupGuide()
+          );
+        }
+
+        // The user can pass either a Figma URL with a `node-id` query param or
+        // the bare file key. If a node id is in the URL we use it directly,
+        // otherwise we fall back to fuzzy-matching the screen name.
+        const fileInput = args.file || config.figma.last_file_key;
+        if (!fileInput) {
+          return this.errorResponse(
+            "No Figma file specified and no previous file remembered. Pass 'file' as a Figma URL or file key."
+          );
+        }
+        const fileKey = extractFileKey(fileInput);
+        if (!fileKey) {
+          return this.errorResponse(
+            `Could not parse a Figma file key from "${fileInput}". Expected a Figma URL or bare file key.`
+          );
+        }
+
+        // Pull a node id from the URL's `node-id=` param if present. Figma
+        // URLs use `1491-683`; the API expects `1491:683`. Normalize.
+        const urlNodeId = extractNodeIdFromUrl(args.file) || extractNodeIdFromUrl(fileInput);
+
+        // Decide which node id to load.
+        const screenArg = typeof args.screen === 'string' ? args.screen.trim() : '';
+        const looksLikeNodeId = /^\d+[:\-]\d+$/.test(screenArg);
+
+        const client = getFigmaClient();
+        let targetNodeId = null;
+        let targetMeta = null; // { name, page, width, height }
+
+        if (looksLikeNodeId) {
+          targetNodeId = screenArg.replace('-', ':');
+        } else if (urlNodeId && !screenArg) {
+          targetNodeId = urlNodeId;
+        } else {
+          // Resolve a name (or fall back to the URL node id) by listing screens.
+          // We need the full file once to map name → id; the result is small.
+          const file = await client.getFile(fileKey);
+          const screens = client.extractScreens(file.document);
+          if (screens.length === 0) {
+            return this.errorResponse(
+              `Figma file "${file.name}" has no top-level frames. Nothing to read.`
+            );
+          }
+
+          // Remember the file so subsequent calls don't need it.
+          config.figma.last_file_key = fileKey;
+          saveConfig();
+
+          if (!screenArg && urlNodeId) {
+            targetNodeId = urlNodeId;
+            const match = screens.find((s) => s.id === urlNodeId);
+            if (match) targetMeta = match;
+          } else if (!screenArg) {
+            return this.errorResponse(
+              `Pass 'screen' as the screen name or node id you want to read.\n` +
+              `For example: read_figma_screen screen="Health Permission_iOS"\n` +
+              `Available pages in this file: ${[...new Set(screens.map(s => s.page))].slice(0, 8).join(', ')}`
+            );
+          } else {
+            const match = findScreenByName(screens, screenArg);
+            if (!match) {
+              const sample = screens.slice(0, 8).map((s) => `  - ${s.name} (${s.page})`).join('\n');
+              return this.errorResponse(
+                `No screen matches "${screenArg}" in "${file.name}".\n` +
+                `Examples of available screens:\n${sample}\n` +
+                `Try the exact name from list_figma_screens, or pass a node id like '1491:683'.`
+              );
+            }
+            targetNodeId = match.id;
+            targetMeta = match;
+          }
+        }
+
+        // Fetch the node subtree (full design data for this one screen).
+        const nodesResult = await client.getNodes(fileKey, [targetNodeId]);
+        const nodeEntry = nodesResult.nodes[targetNodeId];
+        if (!nodeEntry || !nodeEntry.document) {
+          return this.errorResponse(
+            `Figma returned no node for id "${targetNodeId}". The id may be wrong or the screen may have been deleted.\n` +
+            `Try running list_figma_screens to see current ids.`
+          );
+        }
+        const rootNode = nodeEntry.document;
+
+        // Remember file for future calls.
+        config.figma.last_file_key = fileKey;
+        saveConfig();
+
+        // Build the structured spec.
+        const { tree, stats } = summarizeNodeTree(rootNode, {
+          maxDepth: args.max_depth || 12,
+          maxNodes: args.max_nodes || 400,
+        });
+
+        // Optionally render a PNG so the agent can visually verify.
+        let imageUrl = null;
+        let imageError = null;
+        const wantImage = args.include_image !== false;
+        if (wantImage) {
+          try {
+            const images = await client.getImageUrls(fileKey, [targetNodeId], {
+              format: 'png',
+              scale: args.image_scale || 2,
+            });
+            imageUrl = images[targetNodeId] || null;
+          } catch (err) {
+            // Image render is best-effort — never fail the whole call over it.
+            imageError = err.message || String(err);
+          }
+        }
+
+        const box = rootNode.absoluteBoundingBox || {};
+        const screenSpec = {
+          file: { key: fileKey, name: nodesResult.name },
+          screen: {
+            id: rootNode.id,
+            name: rootNode.name || (targetMeta && targetMeta.name) || 'Untitled',
+            page: targetMeta && targetMeta.page ? targetMeta.page : null,
+            width: box.width ? Math.round(box.width) : null,
+            height: box.height ? Math.round(box.height) : null,
+            backgroundColor: rootNode.backgroundColor
+              ? require("../Services/figma-client").figmaColorToHex(rootNode.backgroundColor)
+              : null,
+          },
+          image: imageUrl ? { url: imageUrl, format: 'png', scale: args.image_scale || 2 } : null,
+          imageError,
+          stats: {
+            nodeCount: stats.nodeCount,
+            textCount: stats.textCount,
+            truncated: stats.truncated,
+          },
+          tree,
+        };
+
+        // Render a compact human summary, then attach the full JSON spec so
+        // the LLM can ingest both. Cap the JSON pretty-print indent to keep
+        // tokens down on large screens.
+        let out = `Figma screen loaded: ${screenSpec.screen.name}\n`;
+        out += `File: ${screenSpec.file.name} (${fileKey})\n`;
+        if (screenSpec.screen.page) out += `Page: ${screenSpec.screen.page}\n`;
+        if (screenSpec.screen.width && screenSpec.screen.height) {
+          out += `Size: ${screenSpec.screen.width}×${screenSpec.screen.height}\n`;
+        }
+        if (screenSpec.screen.backgroundColor) out += `Background: ${screenSpec.screen.backgroundColor}\n`;
+        out += `Nodes: ${stats.nodeCount} (text nodes: ${stats.textCount})`;
+        if (stats.truncated) out += ` — TRUNCATED at the limit; raise max_nodes/max_depth if you need more`;
+        out += `\n`;
+        if (imageUrl) {
+          out += `Rendered PNG: ${imageUrl}\n`;
+        } else if (imageError) {
+          out += `Image render failed: ${imageError}\n`;
+        }
+        out += `\n--- DESIGN SPEC (use this to recreate the screen) ---\n`;
+        out += JSON.stringify(screenSpec, null, 2);
+        out += `\n--- END SPEC ---`;
+        return this.textResponse(out);
+      }
+
       case "suggest_figma_screens": {
         if (!config.figma || !config.figma.connected || !config.figma.token || isTokenMasked(config.figma.token)) {
           return this.errorResponse(
@@ -407,6 +586,40 @@ class FigmaSkill extends BaseSkill {
 Use 'configure_figma' once to save the personal access token. Use 'figma_connection_test' to verify before reading. Use 'list_figma_screens' to read frames from a Figma file. Use 'suggest_figma_screens' to recommend ONLY screens not already implemented in the current project, 5 at a time. Never re-prompt for setup once 'config.figma.connected' is true.`
     );
   }
+}
+
+// ── Helpers: parse Figma URLs and resolve screens by name ────────────────
+
+/**
+ * Pull the `node-id` query parameter out of a Figma URL and return it in
+ * API format (`1491:683`). Figma URLs use `1491-683` in the query string.
+ */
+function extractNodeIdFromUrl(input) {
+  if (!input || typeof input !== 'string') return null;
+  const m = input.match(/[?&]node-id=([^&]+)/);
+  if (!m) return null;
+  const raw = decodeURIComponent(m[1]);
+  // Convert `1491-683` → `1491:683`. Leave already-colon ids alone.
+  if (/^\d+-\d+$/.test(raw)) return raw.replace('-', ':');
+  if (/^\d+:\d+$/.test(raw)) return raw;
+  return null;
+}
+
+/**
+ * Find a screen in a flat screen list by name. Tries exact match (case
+ * insensitive) first, then prefix match, then substring. Returns null if
+ * nothing meaningful matches so the caller can show a helpful error.
+ */
+function findScreenByName(screens, query) {
+  if (!Array.isArray(screens) || !query) return null;
+  const q = String(query).trim().toLowerCase();
+  if (!q) return null;
+  const exact = screens.find((s) => (s.name || '').toLowerCase() === q);
+  if (exact) return exact;
+  const prefix = screens.find((s) => (s.name || '').toLowerCase().startsWith(q));
+  if (prefix) return prefix;
+  const sub = screens.find((s) => (s.name || '').toLowerCase().includes(q));
+  return sub || null;
 }
 
 // ── Helpers: detect implemented screens by scanning the project ──────────

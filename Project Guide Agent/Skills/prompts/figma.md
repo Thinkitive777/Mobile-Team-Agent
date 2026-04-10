@@ -19,7 +19,15 @@ optional — never block Jira/Git workflows on it.
   If not configured yet, returns the setup guide. If the saved token has
   been revoked it auto-clears `connected=false` and asks for a new token.
 - `list_figma_screens` — reads a Figma file (URL or key) and lists every
-  top-level frame as a screen. Remembers the last file used.
+  top-level frame as a screen. Remembers the last file used. NOTE: this only
+  returns frame names + dimensions, NOT the visual contents. Use
+  `read_figma_screen` to actually read a screen's design.
+- `read_figma_screen` — fetches the FULL design contents of a single screen
+  (text content, colors, fills, strokes, layout, auto-layout, padding,
+  spacing, corner radii, child hierarchy) plus a rendered PNG URL. Always
+  call this BEFORE generating code for a Figma screen. Accepts the screen
+  by name (substring match), node id (e.g. `1491:683`), or a Figma URL
+  with a `node-id=` query parameter.
 - `suggest_figma_screens` — recommends ONLY screens that are not already
   implemented in the current project. Returns 5 at a time. To see the next
   batch, call again with `offset=<previous_offset + 5>` (or `page=2`, etc.).
@@ -46,6 +54,12 @@ Route any of these to the appropriate Figma tool, even if phrased loosely:
   call `configure_figma` with `token=<the value>`.
 - "read my figma file <url>", "what's in this figma", "show figma screens",
   "list frames", "what designs do we have" → `list_figma_screens`.
+- "read the X screen", "create the X screen from figma", "implement the X
+  screen", "build the X figma screen", "show me the X design", "open the
+  X frame", or any request to recreate/copy/code-up a specific screen →
+  `read_figma_screen` with `screen=<name or node id>`. NEVER fall back to
+  `list_figma_screens` for a single-screen recreation request — that only
+  returns names and will lead to fabricated UI.
 - "suggest screens", "what should I build next from figma",
   "what's missing", "screens not implemented", "next 5 screens",
   "show me 5 more" → `suggest_figma_screens` (use `offset` to paginate).

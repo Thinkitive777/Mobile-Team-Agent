@@ -210,7 +210,230 @@ class FigmaClient {
     }
     return screens;
   }
+
+  /**
+   * Fetch one or more specific nodes from a Figma file by id. Returns the
+   * raw node objects keyed by id. Use this to read a single screen's full
+   * subtree (text, fills, layout, children) without paying for the entire file.
+   */
+  async getNodes(fileKeyOrUrl, nodeIds) {
+    const fileKey = extractFileKey(fileKeyOrUrl);
+    if (!fileKey) {
+      throw new FigmaConnectionError(`Could not extract a Figma file key from "${fileKeyOrUrl}".`);
+    }
+    const ids = Array.isArray(nodeIds) ? nodeIds : [nodeIds];
+    if (ids.length === 0) {
+      throw new FigmaConnectionError('getNodes requires at least one node id');
+    }
+    const idParam = ids.map((id) => encodeURIComponent(id)).join(',');
+    Logger.debug('Fetching Figma nodes', { fileKey, ids });
+    const response = await this._fetchWithRetry(
+      `${FIGMA_API_BASE}/files/${encodeURIComponent(fileKey)}/nodes?ids=${idParam}&geometry=paths`
+    );
+    const data = await response.json();
+    return {
+      key: fileKey,
+      name: data.name || 'Untitled',
+      lastModified: data.lastModified || null,
+      nodes: data.nodes || {},
+    };
+  }
+
+  /**
+   * Render one or more nodes to image URLs (the URLs are temporary signed
+   * S3 links from Figma — caller should download or use them immediately).
+   */
+  async getImageUrls(fileKeyOrUrl, nodeIds, { format = 'png', scale = 2 } = {}) {
+    const fileKey = extractFileKey(fileKeyOrUrl);
+    if (!fileKey) {
+      throw new FigmaConnectionError(`Could not extract a Figma file key from "${fileKeyOrUrl}".`);
+    }
+    const ids = Array.isArray(nodeIds) ? nodeIds : [nodeIds];
+    if (ids.length === 0) return {};
+    const idParam = ids.map((id) => encodeURIComponent(id)).join(',');
+    const safeFormat = ['png', 'jpg', 'svg', 'pdf'].includes(format) ? format : 'png';
+    const safeScale = Math.min(Math.max(Number(scale) || 1, 1), 4);
+    const url =
+      `${FIGMA_API_BASE}/images/${encodeURIComponent(fileKey)}` +
+      `?ids=${idParam}&format=${safeFormat}&scale=${safeScale}`;
+    Logger.debug('Fetching Figma image URLs', { fileKey, ids, format: safeFormat, scale: safeScale });
+    const response = await this._fetchWithRetry(url);
+    const data = await response.json();
+    if (data.err) {
+      throw new FigmaConnectionError(`Figma image render failed: ${data.err}`);
+    }
+    return data.images || {};
+  }
+}
+
+// ── Color + node-tree helpers (used by `read_figma_screen`) ───────────────
+
+/**
+ * Convert a Figma color (0..1 floats per channel) to a #RRGGBB or #RRGGBBAA
+ * hex string. Returns null if the color is missing.
+ */
+function figmaColorToHex(color, opacity) {
+  if (!color) return null;
+  const toByte = (v) => {
+    const n = Math.round(Math.max(0, Math.min(1, Number(v) || 0)) * 255);
+    return n.toString(16).padStart(2, '0');
+  };
+  const r = toByte(color.r);
+  const g = toByte(color.g);
+  const b = toByte(color.b);
+  // Alpha can come from the color object OR from a per-paint `opacity`. Combine both.
+  const colorAlpha = typeof color.a === 'number' ? color.a : 1;
+  const paintAlpha = typeof opacity === 'number' ? opacity : 1;
+  const a = Math.max(0, Math.min(1, colorAlpha * paintAlpha));
+  if (a >= 0.999) return `#${r}${g}${b}`.toUpperCase();
+  return `#${r}${g}${b}${toByte(a)}`.toUpperCase();
+}
+
+/**
+ * Summarize a Figma `paints` array (fills/strokes) into a small array of
+ * { type, color, opacity } objects. Solid colors get a hex string; gradients
+ * record their stops; image fills are flagged so the agent knows an asset is
+ * needed.
+ */
+function summarizePaints(paints) {
+  if (!Array.isArray(paints) || paints.length === 0) return [];
+  const out = [];
+  for (const p of paints) {
+    if (p.visible === false) continue;
+    if (p.type === 'SOLID') {
+      const hex = figmaColorToHex(p.color, p.opacity);
+      if (hex) out.push({ type: 'solid', color: hex });
+    } else if (p.type && p.type.startsWith('GRADIENT_')) {
+      const stops = (p.gradientStops || []).map((s) => ({
+        position: typeof s.position === 'number' ? Number(s.position.toFixed(3)) : null,
+        color: figmaColorToHex(s.color),
+      }));
+      out.push({ type: p.type.toLowerCase(), stops });
+    } else if (p.type === 'IMAGE') {
+      out.push({ type: 'image', imageRef: p.imageRef || null, scaleMode: p.scaleMode || null });
+    }
+  }
+  return out;
+}
+
+/**
+ * Walk a Figma node subtree and produce a compact spec object. Caps total
+ * nodes and depth so a single screen never blows up the response.
+ */
+function summarizeNodeTree(rootNode, options = {}) {
+  const maxDepth = options.maxDepth || 12;
+  const maxNodes = options.maxNodes || 400;
+  const stats = { nodeCount: 0, truncated: false, textCount: 0 };
+  const rootBox = rootNode && rootNode.absoluteBoundingBox;
+
+  function walk(node, depth) {
+    if (!node || node.visible === false) return null;
+    if (stats.nodeCount >= maxNodes) {
+      stats.truncated = true;
+      return null;
+    }
+    stats.nodeCount++;
+
+    const box = node.absoluteBoundingBox || null;
+    const summary = {
+      id: node.id,
+      type: node.type,
+      name: node.name || '',
+    };
+
+    if (box && rootBox) {
+      summary.bounds = {
+        x: Math.round(box.x - rootBox.x),
+        y: Math.round(box.y - rootBox.y),
+        w: Math.round(box.width),
+        h: Math.round(box.height),
+      };
+    } else if (box) {
+      summary.bounds = {
+        x: Math.round(box.x),
+        y: Math.round(box.y),
+        w: Math.round(box.width),
+        h: Math.round(box.height),
+      };
+    }
+
+    const fills = summarizePaints(node.fills);
+    if (fills.length > 0) summary.fills = fills;
+    const strokes = summarizePaints(node.strokes);
+    if (strokes.length > 0) {
+      summary.strokes = strokes;
+      if (typeof node.strokeWeight === 'number') summary.strokeWeight = node.strokeWeight;
+    }
+
+    if (typeof node.cornerRadius === 'number' && node.cornerRadius > 0) {
+      summary.cornerRadius = node.cornerRadius;
+    } else if (Array.isArray(node.rectangleCornerRadii)) {
+      summary.cornerRadii = node.rectangleCornerRadii;
+    }
+
+    if (node.opacity != null && node.opacity < 1) summary.opacity = Number(node.opacity.toFixed(2));
+
+    if (node.layoutMode && node.layoutMode !== 'NONE') {
+      summary.autoLayout = {
+        direction: node.layoutMode, // HORIZONTAL or VERTICAL
+        spacing: node.itemSpacing || 0,
+        padding: {
+          top: node.paddingTop || 0,
+          right: node.paddingRight || 0,
+          bottom: node.paddingBottom || 0,
+          left: node.paddingLeft || 0,
+        },
+        align: node.primaryAxisAlignItems || null,
+        crossAlign: node.counterAxisAlignItems || null,
+      };
+    }
+
+    if (node.type === 'TEXT') {
+      stats.textCount++;
+      const style = node.style || {};
+      summary.text = {
+        content: node.characters || '',
+        fontFamily: style.fontFamily || null,
+        fontWeight: style.fontWeight || null,
+        fontSize: style.fontSize || null,
+        lineHeight: style.lineHeightPx || null,
+        letterSpacing: style.letterSpacing || null,
+        align: style.textAlignHorizontal || null,
+        verticalAlign: style.textAlignVertical || null,
+        // Text color usually lives on the first solid fill of the TEXT node.
+        color: fills.find((f) => f.type === 'solid')?.color || null,
+      };
+    }
+
+    if (node.componentId || node.type === 'INSTANCE') {
+      summary.component = {
+        id: node.componentId || null,
+        name: node.name || null,
+      };
+    }
+
+    if (depth < maxDepth && Array.isArray(node.children) && node.children.length > 0) {
+      const kids = [];
+      for (const child of node.children) {
+        const c = walk(child, depth + 1);
+        if (c) kids.push(c);
+        if (stats.nodeCount >= maxNodes) {
+          stats.truncated = true;
+          break;
+        }
+      }
+      if (kids.length > 0) summary.children = kids;
+    }
+
+    return summary;
+  }
+
+  const tree = walk(rootNode, 0);
+  return { tree, stats };
 }
 
 module.exports = FigmaClient;
 module.exports.extractFileKey = extractFileKey;
+module.exports.figmaColorToHex = figmaColorToHex;
+module.exports.summarizePaints = summarizePaints;
+module.exports.summarizeNodeTree = summarizeNodeTree;
