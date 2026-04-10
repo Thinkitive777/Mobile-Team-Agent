@@ -7,6 +7,7 @@ const CONST = require("../Constants/constants");
 const Logger = require("../Utils/logger");
 const { ConfigError } = require("../Utils/errors");
 const JiraClient = require("./jira-client");
+const FigmaClient = require("./figma-client");
 
 // ── Config ──────────────────────────────────────────────────────────────
 
@@ -22,6 +23,7 @@ let config = {
     projects: {},
   },
   github: { connected: false, token: null, user: null, repo: null },
+  figma: { connected: false, token: null, user: null, last_file_key: null },
   developer_mode: false,
 };
 
@@ -44,6 +46,9 @@ if (fs.existsSync(CONST.CONFIG_FILE)) {
     }
     config = { ...config, ...loaded };
     if (!config.jira.projects) config.jira.projects = {};
+    if (!config.figma) {
+      config.figma = { connected: false, token: null, user: null, last_file_key: null };
+    }
   } catch (e) {
     Logger.error("Config file corrupted, using defaults", { error: e.message });
   }
@@ -76,6 +81,15 @@ function maskToken(token) {
         hasUrl: !!url, hasEmail: !!email, hasToken: !!token, tokenMasked: isTokenMasked(token),
       });
       config.jira.connected = false;
+    }
+  }
+  if (config.figma && config.figma.connected) {
+    const tok = config.figma.token;
+    if (!tok || isTokenMasked(tok)) {
+      Logger.warn('Figma config integrity check failed — resetting connected=false', {
+        hasToken: !!tok, tokenMasked: isTokenMasked(tok),
+      });
+      config.figma.connected = false;
     }
   }
 })();
@@ -153,6 +167,23 @@ function getJiraClient(projectName = null) {
   return new JiraClient(url, email, token);
 }
 
+// ── Figma Client Factory ───────────────────────────────────────────────
+
+function getFigmaClient() {
+  const token = (config.figma && config.figma.token) || process.env.FIGMA_TOKEN;
+  if (isTokenMasked(token)) {
+    throw new ConfigError(
+      "Figma credentials are corrupted — stored token is masked. Run 'configure_figma' to fix."
+    );
+  }
+  if (!token) {
+    throw new ConfigError(
+      "Figma not configured (missing token). Run 'configure_figma' with your personal access token from https://www.figma.com/developers/api#access-tokens"
+    );
+  }
+  return new FigmaClient(token);
+}
+
 // ── Repo Path ──────────────────────────────────────────────────────────
 
 function getRepoPath() {
@@ -167,6 +198,7 @@ module.exports = {
   saveConfig,
   savePreferences,
   getJiraClient,
+  getFigmaClient,
   getRepoPath,
   maskToken,
   isTokenMasked,

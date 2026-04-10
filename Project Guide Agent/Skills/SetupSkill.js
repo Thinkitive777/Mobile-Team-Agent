@@ -85,7 +85,7 @@ class SetupSkill extends BaseSkill {
   }
 
   async handleTool(name, args, context) {
-    const { config, preferences, saveConfig, savePreferences, getJiraClient, maskToken, isTokenMasked, getRepoPath } = context;
+    const { config, preferences, saveConfig, savePreferences, getJiraClient, getFigmaClient, maskToken, isTokenMasked, getRepoPath } = context;
 
     switch (name) {
       case "invoke_projectguide": {
@@ -96,9 +96,11 @@ class SetupSkill extends BaseSkill {
         const jiraCredOk = !!(activeCreds.url && activeCreds.email && activeCreds.token && !isTokenMasked(activeCreds.token));
         const jiraOk = (config.jira.connected && jiraCredOk) || !!process.env.JIRA_URL;
         const githubOk = config.github.connected || !!process.env.GITHUB_TOKEN;
+        const figmaOk = !!((config.figma && config.figma.connected && config.figma.token && !isTokenMasked(config.figma.token)) || process.env.FIGMA_TOKEN);
         const missing = [];
         if (!jiraOk) missing.push("Jira");
         if (!githubOk) missing.push("GitHub");
+        // Figma is optional — surface as info, never block
 
         let out = `Project Guide Agent v${CONST.VERSION} ACTIVATED.\n\n`;
         if (!jiraOk && config.jira.connected && !jiraCredOk) {
@@ -112,6 +114,11 @@ class SetupSkill extends BaseSkill {
           out += "All services connected. Use 'morning_standup' or 'analyze_workload' to begin.\n";
           if (activeProject) out += `Active Jira project: ${activeProject}\n`;
           if (projectList.length > 1) out += `Configured projects: ${projectList.join(', ')} — use 'switch_jira_project' to switch.\n`;
+        }
+        if (figmaOk) {
+          out += `Figma: connected${config.figma && config.figma.user ? ` as ${config.figma.user}` : ''}.\n`;
+        } else {
+          out += `Figma: not configured (optional). Use 'configure_figma' to enable design reading.\n`;
         }
         return this.textResponse(out);
       }
@@ -155,6 +162,14 @@ class SetupSkill extends BaseSkill {
         out += `GitHub: ${githubConnected ? 'Connected' : 'Not configured'}\n`;
         if (githubConnected) {
           out += `  User: ${config.github.user || process.env.GITHUB_USER || 'via token'}\n`;
+        }
+        const figmaTokenStored = (config.figma && config.figma.token) || process.env.FIGMA_TOKEN;
+        const figmaConnected = !!(figmaTokenStored && !isTokenMasked(figmaTokenStored) && (config.figma?.connected || process.env.FIGMA_TOKEN));
+        out += `Figma: ${figmaConnected ? 'Connected' : 'Not configured'}\n`;
+        if (figmaConnected) {
+          if (config.figma?.user) out += `  User: ${config.figma.user}\n`;
+          out += `  Token: ${maskToken(figmaTokenStored)}\n`;
+          if (config.figma?.last_file_key) out += `  Last file: ${config.figma.last_file_key}\n`;
         }
         out += `\n`;
 
@@ -334,6 +349,7 @@ class SetupSkill extends BaseSkill {
           jira: { status: "unchecked" },
           git: { status: "unchecked" },
           reports: { status: "unchecked" },
+          figma: { status: "unchecked" },
         };
 
         try {
@@ -360,9 +376,22 @@ class SetupSkill extends BaseSkill {
           results.reports = { status: "error", message: err.message };
         }
 
+        try {
+          const figmaTokenPresent = !!((config.figma && config.figma.token) || process.env.FIGMA_TOKEN);
+          if (!figmaTokenPresent) {
+            results.figma = { status: "skipped", message: "Figma not configured (optional)" };
+          } else {
+            const fclient = getFigmaClient();
+            const u = await fclient.testConnection();
+            results.figma = { status: "ok", user: u.user };
+          }
+        } catch (err) {
+          results.figma = { status: "error", message: err.message };
+        }
+
         const allOk = Object.values(results)
           .filter(v => typeof v === 'object' && v.status)
-          .every(v => v.status === 'ok');
+          .every(v => v.status === 'ok' || v.status === 'skipped');
 
         let out = `Health Check — ${allOk ? 'ALL OK' : 'ISSUES DETECTED'}\n\n`;
         out += JSON.stringify(results, null, 2);

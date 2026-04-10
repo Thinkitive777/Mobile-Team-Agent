@@ -64,6 +64,36 @@ class ValidationError extends AppError {
   }
 }
 
+class FigmaConnectionError extends AppError {
+  constructor(message, details = null) {
+    super(message, 'FIGMA_CONNECTION_ERROR', details);
+  }
+}
+
+class FigmaAuthError extends AppError {
+  constructor(message, details = null) {
+    super(message, 'FIGMA_AUTH_ERROR', details);
+  }
+}
+
+class FigmaNetworkError extends AppError {
+  constructor(message, details = null) {
+    super(message, 'FIGMA_NETWORK_ERROR', details);
+  }
+}
+
+class FigmaRateLimitError extends AppError {
+  constructor(message, details = null) {
+    super(message, 'FIGMA_RATE_LIMIT', details);
+  }
+}
+
+class FigmaNotFoundError extends AppError {
+  constructor(message, details = null) {
+    super(message, 'FIGMA_NOT_FOUND', details);
+  }
+}
+
 module.exports = {
   AppError,
   JiraConnectionError,
@@ -73,4 +103,9 @@ module.exports = {
   GitError,
   ConfigError,
   ValidationError,
+  FigmaConnectionError,
+  FigmaAuthError,
+  FigmaNetworkError,
+  FigmaRateLimitError,
+  FigmaNotFoundError,
 };

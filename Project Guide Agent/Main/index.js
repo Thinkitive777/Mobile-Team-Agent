@@ -16,7 +16,7 @@ const CONST = require("../Constants/constants");
 const Logger = require("../Utils/logger");
 const {
   config, preferences, saveConfig, savePreferences,
-  getJiraClient, getRepoPath, maskToken, isTokenMasked,
+  getJiraClient, getFigmaClient, getRepoPath, maskToken, isTokenMasked,
 } = require("../Services/config-manager");
 
 // Response helper used by the top-level error handler
@@ -39,6 +39,7 @@ const JiraReadSkill = require("../Skills/JiraReadSkill");
 const JiraWriteSkill = require("../Skills/JiraWriteSkill");
 const WorkflowSkill = require("../Skills/WorkflowSkill");
 const GitSkill = require("../Skills/GitSkill");
+const FigmaSkill = require("../Skills/FigmaSkill");
 const LegacySkill = require("../Skills/LegacySkill");
 
 const registry = new SkillRegistry();
@@ -47,6 +48,7 @@ registry.register(new JiraReadSkill());
 registry.register(new JiraWriteSkill());
 registry.register(new WorkflowSkill());
 registry.register(new GitSkill());
+registry.register(new FigmaSkill());
 registry.register(new LegacySkill());
 
 // ── Tool definitions ────────────────────────────────────────────────────
@@ -91,6 +93,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     saveConfig,
     savePreferences,
     getJiraClient,
+    getFigmaClient,
     getRepoPath,
     maskToken,
     isTokenMasked,
@@ -122,6 +125,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         break;
       case 'JIRA_CONNECTION_ERROR':
         hint = "\n\nJira connection failed. Call 'health_check' to diagnose, or 'configure_service' to reconfigure.";
+        break;
+      case 'FIGMA_AUTH_ERROR':
+        hint = "\n\nYour Figma personal access token is invalid or expired.\nGenerate a new one at https://www.figma.com/developers/api#access-tokens and run 'configure_figma'.";
+        if (config.figma) config.figma.connected = false;
+        break;
+      case 'FIGMA_NETWORK_ERROR':
+        hint = "\n\nCould not reach Figma. Check your internet connection and try again.";
+        break;
+      case 'FIGMA_RATE_LIMIT':
+        hint = "\n\nFigma API rate limit exceeded. Wait a moment and retry.";
+        break;
+      case 'FIGMA_NOT_FOUND':
+        hint = "\n\nThe Figma file was not found, or your token cannot access it. Verify the file URL and that the token's account has access.";
+        break;
+      case 'FIGMA_CONNECTION_ERROR':
+        hint = "\n\nFigma request failed. Run 'figma_connection_test' to diagnose, or 'configure_figma' to reset the token.";
         break;
     }
 
