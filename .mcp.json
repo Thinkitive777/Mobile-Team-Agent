@@ -1,9 +1,9 @@
 {
   "mcpServers": {
-    "projectguide-agent": {
+    "mobile-team-agent": {
       "type": "stdio",
       "command": "node",
-      "args": ["Project Guide Agent/Main/index.js"],
+      "args": ["Mobile Team Agent/Main/index.js"],
       "env": {}
     }
   }

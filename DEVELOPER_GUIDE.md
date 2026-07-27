@@ -1,12 +1,12 @@
-# Project Guide Agent — Developer Guide
+# Mobile Team Agent — Developer Guide
 
-A practical, no-fluff guide for developers using the Project Guide Agent in their daily workflow. No prior knowledge of the agent is needed.
+A practical, no-fluff guide for developers using the Mobile Team Agent in their daily workflow. No prior knowledge of the agent is needed.
 
 ---
 
 ## What Is This?
 
-Project Guide Agent is your AI-powered developer assistant that lives inside Claude Code. It connects to your **Jira** and **Git** to help you:
+Mobile Team Agent is your AI-powered developer assistant that lives inside Claude Code. It connects to your **Jira** and **Git** to help you:
 
 - Plan your day with prioritized tickets and code context
 - Track what's done, what's pending, and what's blocked
@@ -25,7 +25,7 @@ Think of it as a smart assistant that reads your Jira board, your Git commits, *
 
 **Mac / Linux:**
 ```bash
-cd "Project Guide Agent"
+cd "Mobile Team Agent"
 chmod +x install.sh && ./install.sh
 ```
 
@@ -42,7 +42,7 @@ claude
 
 Then type:
 ```
-invoke projectguide-agent
+invoke mobile-team-agent
 ```
 
 The agent checks what's connected and what needs setup.
@@ -295,7 +295,7 @@ Wrap up
 
 5. **Carry forward** — items that will appear in tomorrow's standup
 
-The report is saved automatically to `~/.projectguide-agent/daily-reports/`.
+The report is saved automatically to `~/.mobile-team-agent/daily-reports/`.
 
 **Include non-ticket work:**
 
@@ -453,7 +453,7 @@ You can also use natural language — the agent understands intent:
 
 | What to say | What it does |
 |-------------|--------------|
-| `invoke projectguide-agent` | Activate agent, check status |
+| `invoke mobile-team-agent` | Activate agent, check status |
 | `Configure jira` | Set up Jira connection |
 | `Health check` | Test all integrations |
 | `Set my default project to PROJ` | Save preferences |
@@ -491,7 +491,7 @@ This means your report reflects **everything you did**, not just what a project 
 
 Every time you run an end-of-day report, it's saved as a markdown file:
 ```
-~/.projectguide-agent/daily-reports/2026-03-27.md
+~/.mobile-team-agent/daily-reports/2026-03-27.md
 ```
 
 The report contains:
@@ -633,7 +633,7 @@ Configure jira
 
 Make sure you've activated it first:
 ```
-invoke projectguide-agent
+invoke mobile-team-agent
 ```
 
 ### Git data missing in reports
@@ -642,7 +642,7 @@ The agent reads Git from the current working directory. If you're in a different
 
 ### Reports directory
 
-All reports are stored in `~/.projectguide-agent/daily-reports/`. You can read them directly — they're plain markdown files.
+All reports are stored in `~/.mobile-team-agent/daily-reports/`. You can read them directly — they're plain markdown files.
 
 ---
 
@@ -653,10 +653,10 @@ The agent runs as an MCP (Model Context Protocol) server that Claude Code commun
 - **Project-scoped MCP** — the agent registers via `.mcp.json` in the project root, not globally. It only activates when you run `claude` from this project directory. To use it in another project, copy the `.mcp.json` file there.
 - **No data leaves your machine** beyond Jira API calls (which use your own credentials)
 - **Git analysis is local** — diffs are computed locally via `git diff-tree` and `git show`, nothing is sent anywhere
-- **Preferences** are stored in `~/.projectguide-agent/preferences.json`
-- **Credentials** are stored in `~/.projectguide-agent/config.json` (file permissions: 600)
-- **Reports** are plain markdown in `~/.projectguide-agent/daily-reports/`
-- **Memory** is stored in `~/.projectguide-agent/memory/` — ticket notes, journal, decisions (all JSON)
+- **Preferences** are stored in `~/.mobile-team-agent/preferences.json`
+- **Credentials** are stored in `~/.mobile-team-agent/config.json` (file permissions: 600)
+- **Reports** are plain markdown in `~/.mobile-team-agent/daily-reports/`
+- **Memory** is stored in `~/.mobile-team-agent/memory/` — ticket notes, journal, decisions (all JSON)
 - **Offline resilience** — if Jira goes down, write actions are queued and can be synced later
 
 ### Architecture (for contributors)

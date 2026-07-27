@@ -1,8 +1,8 @@
-# ProjectGuide Agent v2.0.0 - Upgrade & Implementation Guide
+# Mobile Team Agent v2.0.0 - Upgrade & Implementation Guide
 
 ## 🎉 What's New
 
-The ProjectGuide Agent has been upgraded from a mock-data prototype to a **production-ready, real-world developer assistant** with:
+The Mobile Team Agent has been upgraded from a mock-data prototype to a **production-ready, real-world developer assistant** with:
 
 - ✅ **Real Jira Integration** (REST API, read-only)
 - ✅ **Git Commit Analysis** with automatic ticket linking
@@ -31,7 +31,7 @@ The ProjectGuide Agent has been upgraded from a mock-data prototype to a **produ
 ### 1. Installation
 
 ```bash
-cd "Project Guide Agent"
+cd "Mobile Team Agent"
 npm install
 ```
 
@@ -57,7 +57,7 @@ export JIRA_TOKEN=your-api-token
 ```
 User: "Configure Jira"
 Agent: [Calls configure_service with url, email, token]
-→ Saves to ~/.projectguide-agent/config.json
+→ Saves to ~/.mobile-team-agent/config.json
 ```
 
 ### 3. Start the Agent
@@ -66,7 +66,7 @@ Agent: [Calls configure_service with url, email, token]
 npm start
 ```
 
-The agent will output: `Project Guide Agent v2.0.0 running on stdio`
+The agent will output: `Mobile Team Agent v2.0.0 running on stdio`
 
 ---
 
@@ -124,7 +124,7 @@ The agent will output: `Project Guide Agent v2.0.0 running on stdio`
 - Fetches all commits made TODAY
 - Checks for completed & in-progress tickets
 - Generates structured Markdown report
-- Saves to: `~/.projectguide-agent/daily-reports/YYYY-MM-DD.md`
+- Saves to: `~/.mobile-team-agent/daily-reports/YYYY-MM-DD.md`
 
 **Example report:**
 ```markdown
@@ -201,7 +201,7 @@ Shows:
 
 ### Configuration
 ```
-~/.projectguide-agent/config.json
+~/.mobile-team-agent/config.json
 ```
 
 Structure:
@@ -220,7 +220,7 @@ Structure:
 
 ### Daily Reports
 ```
-~/.projectguide-agent/daily-reports/
+~/.mobile-team-agent/daily-reports/
   ├── 2026-03-24.md
   ├── 2026-03-23.md
   └── 2026-03-22.md
@@ -261,7 +261,7 @@ user: "Good morning!"
 user: "Done for today"
 → end_of_day_report
 → Returns: ✅ Daily Report Generated
-→ Saves to: ~/.projectguide-agent/daily-reports/YYYY-MM-DD.md
+→ Saves to: ~/.mobile-team-agent/daily-reports/YYYY-MM-DD.md
 ```
 
 ### 4. Test Report Retrieval
@@ -286,7 +286,7 @@ user: "Show me today's report"
 ### Compatible Changes
 
 - `run_skill` tool still works (developer-mode, file-info)
-- `invoke_projectguide` still works for activation
+- `invoke_mobile_team` still works for activation
 - `get_setup_status` still works
 - `configure_service` still works (but now saves real tokens)
 
@@ -294,7 +294,7 @@ user: "Show me today's report"
 
 1. **Backup old config** (if needed):
    ```bash
-   cp ~/.projectguide-agent/config.json ~/.projectguide-agent/config.json.bak
+   cp ~/.mobile-team-agent/config.json ~/.mobile-team-agent/config.json.bak
    ```
 
 2. **Update code** (already done in this upgrade)
@@ -332,8 +332,8 @@ user: "Show me today's report"
 └─────────┘ └────────┘ └──────────┘ └──────────────┘
      │           │           │              │
      ▼           ▼           ▼              ▼
-  REST API   git binary  File I/O    ~/.projectguide
-              /usr/bin          -agent/...
+  REST API   git binary  File I/O    ~/.mobile-team-agent/...
+              /usr/bin
 ```
 
 ---
@@ -388,7 +388,7 @@ Agent:  [Calls get_daily_report]
 ### "Report for 2026-03-24 not found"
 - Report must exist first (run `end_of_day_report`)
 - Use `list_daily_reports` to see available dates
-- Check: `ls ~/.projectguide-agent/daily-reports/`
+- Check: `ls ~/.mobile-team-agent/daily-reports/`
 
 ### Agent doesn't auto-trigger morning/EOD
 - Ensure exact phrase match (case-insensitive)
@@ -424,7 +424,7 @@ For bugs or questions:
 1. Check `agent_prompt.md` for detailed behavior rules
 2. Review this guide for configuration steps
 3. Test connection with `jira_connection_test`
-4. Check logs: `~/.projectguide-agent/config.json`
+4. Check logs: `~/.mobile-team-agent/config.json`
 
 ---
 
