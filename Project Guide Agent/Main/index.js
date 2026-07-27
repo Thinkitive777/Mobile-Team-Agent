@@ -40,6 +40,7 @@ const JiraWriteSkill = require("../Skills/JiraWriteSkill");
 const WorkflowSkill = require("../Skills/WorkflowSkill");
 const GitSkill = require("../Skills/GitSkill");
 const FigmaSkill = require("../Skills/FigmaSkill");
+const MemorySkill = require("../Skills/MemorySkill");
 const LegacySkill = require("../Skills/LegacySkill");
 
 const registry = new SkillRegistry();
@@ -49,6 +50,7 @@ registry.register(new JiraWriteSkill());
 registry.register(new WorkflowSkill());
 registry.register(new GitSkill());
 registry.register(new FigmaSkill());
+registry.register(new MemorySkill());
 registry.register(new LegacySkill());
 
 // ── Tool definitions ────────────────────────────────────────────────────

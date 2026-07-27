@@ -1,6 +1,6 @@
 {
   "name": "project-guide-agent",
-  "version": "3.0.0",
+  "version": "3.3.0",
   "description": "Context-aware, memory-driven developer assistant with Jira + Git integration, smart ticket guidance, persistent preferences, and intelligent workflow automation",
   "main": "Main/index.js",
   "bin": "Main/index.js",
@@ -8,7 +8,7 @@
     "start": "node Main/index.js",
     "build": "pkg . --out-path dist/",
     "build:all": "pkg . --out-path dist/ -t node18-macos-x64,node18-macos-arm64,node18-win-x64,node18-linux-x64,node18-linux-arm64",
-    "validate": "node -c Main/index.js && node -c Services/jira-client.js && node -c Utils/git-utils.js && node -c Services/report-manager.js && node -c Constants/constants.js && node -c Utils/errors.js && node -c Utils/logger.js && node -c Utils/validators.js && node -c Services/offline-queue.js && echo 'All files valid'"
+    "validate": "node -c Main/index.js && node -c Main/SkillRegistry.js && node -c Skills/Core/BaseSkill.js && node -c Skills/FigmaSkill.js && node -c Skills/GitSkill.js && node -c Skills/JiraReadSkill.js && node -c Skills/JiraWriteSkill.js && node -c Skills/LegacySkill.js && node -c Skills/MemorySkill.js && node -c Skills/SetupSkill.js && node -c Skills/WorkflowSkill.js && node -c Services/config-manager.js && node -c Services/figma-client.js && node -c Services/jira-client.js && node -c Services/memory-manager.js && node -c Services/offline-queue.js && node -c Services/report-manager.js && node -c Utils/errors.js && node -c Utils/git-utils.js && node -c Utils/logger.js && node -c Utils/ticket-utils.js && node -c Utils/validators.js && node -c Constants/constants.js && echo 'All 23 files valid'"
   },
   "pkg": {
     "assets": [],

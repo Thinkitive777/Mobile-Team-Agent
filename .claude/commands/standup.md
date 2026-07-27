@@ -1,0 +1,1 @@
+Call the `morning_standup` tool to generate a quick morning standup. This shows new tickets assigned since yesterday, overdue items, high-priority tickets, in-progress work with commit activity, carry-forward from yesterday, and quick-pick suggestions.

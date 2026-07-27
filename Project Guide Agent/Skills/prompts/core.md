@@ -58,7 +58,10 @@ Do NOT route these to `analyze_workload`:
 
 ### Other Triggers
 - Morning intent ("Good morning", "start my day", "morning", "let's start") → `morning_standup`
+- Day planning intent ("plan my day", "let's plan today's work", "plan today", "what should I focus on today", "daily plan") → `plan_my_day`
 - End-of-day intent ("End of day", "EOD", "wrap up", "finish day") → `end_of_day_report`
+- Memory intent ("remember this", "note that") → `remember`; ("what did I note about...") → `recall`; ("I just finished...", "switching to...") → `journal`; ("we decided...") → `add_decision`
+- Commit deep-dive ("what did I change in that commit?") → `get_commit_details`
 - Weekly rollup intent ("weekly summary") → `weekly_summary`
 - Saved report intent ("daily report", "EOD report") → `get_daily_report` or `list_daily_reports`
 - "What should I work on next?" / "what should I pick up?" → `get_ticket_suggestions`
