@@ -1,12 +1,12 @@
 #!/bin/bash
-# Project Guide Agent — Quick Installer
+# Mobile Team Agent — Quick Installer
 # Just unzip and run: chmod +x install.sh && ./install.sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-AGENT_DIR="$SCRIPT_DIR/Project Guide Agent"
+AGENT_DIR="$SCRIPT_DIR/Mobile Team Agent"
 
 if [ ! -d "$AGENT_DIR" ]; then
-    echo "Error: 'Project Guide Agent' directory not found."
+    echo "Error: 'Mobile Team Agent' directory not found."
     echo "Make sure you're running this from the unzipped project root."
     exit 1
 fi
@@ -14,7 +14,7 @@ fi
 INSTALLER=""
 
 # Backwards compatible: older archives may have the installer at the root,
-# but this repo keeps it under `Project Guide Agent/Scripts/`.
+# but this repo keeps it under `Mobile Team Agent/Scripts/`.
 if [ -f "$AGENT_DIR/install.sh" ]; then
     INSTALLER="$AGENT_DIR/install.sh"
 elif [ -f "$AGENT_DIR/Scripts/install.sh" ]; then

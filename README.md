@@ -1,4 +1,4 @@
-# Project Guide Agent
+# Mobile Team Agent
 
 An intelligent developer assistant that integrates Jira, Git, and daily workflow automation — powered by Claude Code MCP.
 
@@ -11,20 +11,20 @@ An intelligent developer assistant that integrates Jira, Git, and daily workflow
 
 ### Mac / Linux
 ```bash
-git clone https://github.com/Shekhar9398/Project-Guide-Claude-Agent.git
-cd Project-Guide-Claude-Agent/"Project Guide Agent"
+git clone https://github.com/Shekhar9398/Mobile-Team-Agent.git
+cd Mobile-Team-Agent/"Mobile Team Agent"
 chmod +x install.sh && ./install.sh
 ```
 
 ### Windows
 ```
-git clone https://github.com/Shekhar9398/Project-Guide-Claude-Agent.git
-cd Project-Guide-Claude-Agent\Project Guide Agent
+git clone https://github.com/Shekhar9398/Mobile-Team-Agent.git
+cd Mobile-Team-Agent\Mobile Team Agent
 install.bat
 ```
 
 That's it. The installer runs `npm install --production` for you, copies the
-source to `~/.projectguide-agent/`, and registers the MCP server globally —
+source to `~/.mobile-team-agent/`, and registers the MCP server globally —
 the agent is then available in any `claude` session on your machine.
 
 > The repo is source-only. There are no prebuilt binaries or distribution
@@ -37,7 +37,7 @@ Open any terminal, run `claude`, then:
 
 | Say this | What happens |
 |----------|-------------|
-| `invoke projectguide-agent` | Activate the agent, check setup status |
+| `invoke mobile-team-agent` | Activate the agent, check setup status |
 | `Good morning` | Daily standup — Jira tickets + Git commits + plan |
 | `End of day` | Generate & save daily report |
 | `What's my workload?` | Analyze and categorize all tickets |
@@ -55,16 +55,16 @@ After invoking, connect your tools:
 
 - **23 MCP tools** — Jira (read-only), Git analysis, automation, reports
 - **Morning standup** — auto-generates prioritized daily plan
-- **End-of-day reports** — saved to `~/.projectguide-agent/daily-reports/`
+- **End-of-day reports** — saved to `~/.mobile-team-agent/daily-reports/`
 - **Blocker detection** — finds blocked tickets across Jira links, labels, status
 - **Graceful degradation** — works with partial data if Jira or Git is unavailable
 
 ## How It Works
 
 The installer:
-1. Copies the agent source into `~/.projectguide-agent/src/`
+1. Copies the agent source into `~/.mobile-team-agent/src/`
 2. Runs `npm install --production` inside that directory
-3. Writes a small runner shim to `~/.projectguide-agent/bin/projectguide-agent`
+3. Writes a small runner shim to `~/.mobile-team-agent/bin/mobile-team-agent`
 4. Registers the MCP server at **user scope** via `claude mcp add -s user` (writes to `~/.claude.json`)
 5. Installs agent instructions to `~/.claude/CLAUDE.md`
 
@@ -94,8 +94,8 @@ This removes the binary, MCP registration from `~/.claude.json`, global CLAUDE.m
 
 ### Working on the agent
 ```bash
-git clone https://github.com/Shekhar9398/Project-Guide-Claude-Agent.git
-cd Project-Guide-Claude-Agent/"Project Guide Agent"
+git clone https://github.com/Shekhar9398/Mobile-Team-Agent.git
+cd Mobile-Team-Agent/"Mobile Team Agent"
 npm install                # full deps including pkg (devDependency)
 npm run validate           # syntax-check the core source files
 npm start                  # run the MCP server directly with node

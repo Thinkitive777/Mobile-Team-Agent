@@ -1,0 +1,20 @@
+#!/bin/bash
+
+# Mobile Team Agent 'invoke' wrapper
+# This script makes 'invoke mobile-team-agent' work from the terminal.
+
+if [ "$1" == "mobile-team-agent" ]; then
+    shift
+    claude "invoke mobile-team-agent $@"
+elif [ "$1" == "--help" ] || [ "$1" == "-h" ]; then
+    echo "Mobile Team Agent - Invoke Wrapper"
+    echo "Usage: invoke mobile-team-agent [additional prompts]"
+    echo "       invoke [claude arguments]"
+else
+    # Fallback to standard claude if no arguments or unknown arguments
+    if [ -z "$1" ]; then
+        claude
+    else
+        claude "$@"
+    fi
+fi
