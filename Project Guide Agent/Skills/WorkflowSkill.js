@@ -10,6 +10,8 @@ const { validate, dateSchema } = require("../Utils/validators");
 const CONST = require("../Constants/constants");
 const ReportManager = require("../Services/report-manager");
 const GitUtils = require("../Utils/git-utils");
+const MemoryManager = require("../Services/memory-manager");
+const { isTicketBlocked } = require("../Utils/ticket-utils");
 const Logger = require("../Utils/logger");
 
 class WorkflowSkill extends BaseSkill {
@@ -24,6 +26,16 @@ class WorkflowSkill extends BaseSkill {
         name: "morning_standup",
         description: "Generate morning standup when user greets (Good morning / Hi / start my day): pending tickets, recent commits, prioritized daily plan. Works even if Jira is unavailable.",
         inputSchema: { type: "object", properties: {} },
+      },
+      {
+        name: "plan_my_day",
+        description: "Deep daily planning ('plan my day', 'let's plan today's work', 'what should I focus on today'). Goes beyond morning_standup: analyses new/pending/blocked/overdue tickets, reads latest comments for context, surfaces recent code activity and saved memory, and produces a prioritised action plan.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project: { type: "string", description: "Project key override (default: saved preference)" },
+          },
+        },
       },
       {
         name: "end_of_day_report",
@@ -217,6 +229,264 @@ class WorkflowSkill extends BaseSkill {
         } else if (!jiraError) {
           out += `No pending tickets found. Use 'list_projects' to explore your Jira projects.\n`;
         }
+        return this.textResponse(out);
+      }
+
+      case "plan_my_day": {
+        const now = new Date();
+        let tickets = [];
+        let newTickets = [];
+        let jiraError = null;
+        let gitError = null;
+
+        try {
+          const client = getJiraClient();
+          const project = args.project || preferences.last_project;
+          const clauses = ['assignee = currentUser()', 'statusCategory != Done'];
+          if (project) clauses.push(`project = "${project}"`);
+          const jql = clauses.join(' AND ') + ' ORDER BY priority DESC, duedate ASC';
+          const result = await client.searchTickets(jql, [...CONST.JIRA_DEFAULT_FIELDS, 'issuetype', 'comment']);
+          tickets = result.tickets;
+
+          // Detect newly assigned tickets
+          try {
+            const newClauses = ['assignee = currentUser()', 'assignee CHANGED AFTER -1d', 'statusCategory != Done'];
+            if (project) newClauses.push(`project = "${project}"`);
+            const newResult = await client.searchTickets(newClauses.join(' AND ') + ' ORDER BY priority DESC');
+            newTickets = newResult.tickets;
+          } catch (newErr) {
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            const yStr = yesterday.toISOString().split('T')[0];
+            newTickets = tickets.filter(t => t.created && t.created >= yStr);
+          }
+        } catch (err) {
+          jiraError = err.message;
+        }
+
+        let commits = [];
+        let workAreas = null;
+        try {
+          commits = await GitUtils.getRecentCommits(CONST.STANDUP_COMMIT_WINDOW, getRepoPath());
+          // Analyze what code areas were worked on recently
+          workAreas = await GitUtils.analyzeWorkAreas(CONST.STANDUP_COMMIT_WINDOW, getRepoPath());
+        } catch (err) {
+          gitError = err.message;
+        }
+
+        // Fetch yesterday's report for "completed yesterday" section
+        const yesterdayReport = ReportManager.getYesterdayCarryForward();
+        const yesterdayDate = new Date();
+        yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+        const yesterdayContent = ReportManager.getReport(ReportManager.formatDate(yesterdayDate));
+        let completedYesterday = [];
+        if (yesterdayContent) {
+          const sections = ReportManager._extractSections(yesterdayContent);
+          completedYesterday = sections.completed;
+        }
+
+        let out = `Daily Work Plan — ${now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}\n`;
+        out += `${'='.repeat(60)}\n\n`;
+
+        if (jiraError) out += `[Jira unavailable: ${jiraError}]\n\n`;
+        if (gitError) out += `[Git unavailable: ${gitError}]\n\n`;
+
+        // === Yesterday's Completed Work ===
+        if (completedYesterday.length > 0) {
+          out += `COMPLETED YESTERDAY:\n`;
+          for (const item of completedYesterday) out += `  [done] ${item}\n`;
+          out += `\n`;
+        }
+
+        // === Recent Code Changes (what you were actually working on) ===
+        if (workAreas && workAreas.totalCommits > 0) {
+          out += `RECENT CODE ACTIVITY (${CONST.STANDUP_COMMIT_WINDOW}):\n`;
+          out += `  ${workAreas.totalCommits} commit(s), +${workAreas.totalInsertions}/-${workAreas.totalDeletions} lines\n\n`;
+
+          const sortedAreas = Object.entries(workAreas.areas)
+            .sort((a, b) => (b[1].insertions + b[1].deletions) - (a[1].insertions + a[1].deletions));
+
+          if (sortedAreas.length > 0) {
+            out += `  Areas worked on:\n`;
+            for (const [area, data] of sortedAreas.slice(0, 6)) {
+              out += `    ${area} — ${data.fileCount} file(s), +${data.insertions}/-${data.deletions}\n`;
+            }
+            out += `\n`;
+          }
+
+          if (workAreas.topFiles.length > 0) {
+            out += `  Most changed files:\n`;
+            for (const f of workAreas.topFiles.slice(0, 5)) {
+              out += `    ${f.path} — +${f.insertions}/-${f.deletions} (${f.commitCount} commit(s))\n`;
+            }
+            out += `\n`;
+          }
+
+          // Link commits to tickets for context
+          const ticketCommits = {};
+          for (const c of commits) {
+            for (const tid of c.ticketIds) {
+              if (!ticketCommits[tid]) ticketCommits[tid] = [];
+              ticketCommits[tid].push(c);
+            }
+          }
+          if (Object.keys(ticketCommits).length > 0) {
+            out += `  Commits linked to tickets:\n`;
+            for (const [tid, tCommits] of Object.entries(ticketCommits)) {
+              out += `    ${tid}: ${tCommits.length} commit(s) — ${tCommits.map(c => c.message).join('; ')}\n`;
+            }
+            out += `\n`;
+          }
+        }
+
+        if (tickets.length === 0 && !jiraError) {
+          out += `No pending tickets assigned to you. You're all caught up!\n`;
+          return this.textResponse(out);
+        }
+
+        const inProgress = tickets.filter(t => t.status === "In Progress");
+        const overdue = tickets.filter(t => t.dueDate && new Date(t.dueDate) < now);
+        const highPriority = tickets.filter(t => t.priority === "Highest" || t.priority === "High");
+        const blocked = tickets.filter(isTicketBlocked);
+        const notStarted = tickets.filter(t =>
+          t.status !== "In Progress" && !blocked.includes(t) && !(t.dueDate && new Date(t.dueDate) < now)
+        );
+        const newKeys = new Set(newTickets.map(t => t.key));
+
+        // === New Tickets ===
+        if (newTickets.length > 0) {
+          out += `NEW — Assigned since yesterday (${newTickets.length}):\n`;
+          for (const t of newTickets) {
+            out += `  [new] ${t.key}: ${t.summary} [${t.priority}]${t.dueDate ? ` (due ${t.dueDate})` : ''}\n`;
+          }
+          out += `\n`;
+        }
+
+        // === Blockers ===
+        if (blocked.length > 0) {
+          out += `BLOCKED (${blocked.length}) — Needs attention:\n`;
+          for (const t of blocked) {
+            const blockers = (t.issueLinks || []).filter(l => l.description?.toLowerCase().includes("is blocked by")).map(l => `${l.linkedKey} [${l.linkedStatus}]`);
+            out += `  [blocked] ${t.key}: ${t.summary}\n`;
+            if (blockers.length > 0) out += `            Blocked by: ${blockers.join(", ")}\n`;
+            // Show latest comment for context
+            if (t.comments && t.comments.length > 0) {
+              const latest = t.comments[t.comments.length - 1];
+              const preview = (latest.body || '').substring(0, 120);
+              out += `            Latest comment (${latest.author}): ${preview}...\n`;
+            }
+          }
+          out += `\n`;
+        }
+
+        // === Overdue ===
+        if (overdue.length > 0) {
+          out += `OVERDUE (${overdue.length}) — Past due date:\n`;
+          for (const t of overdue) {
+            const daysOver = Math.ceil((now - new Date(t.dueDate)) / (1000 * 60 * 60 * 24));
+            out += `  [overdue] ${t.key}: ${t.summary} — ${daysOver} day(s) overdue (was due ${t.dueDate})\n`;
+          }
+          out += `\n`;
+        }
+
+        // === In Progress ===
+        if (inProgress.length > 0) {
+          out += `IN PROGRESS (${inProgress.length}):\n`;
+          for (const t of inProgress) {
+            const related = commits.filter(c => c.ticketIds.includes(t.key));
+            out += `  [wip] ${t.key}: ${t.summary}`;
+            if (related.length > 0) out += ` (${related.length} recent commit(s))`;
+            if (t.dueDate) out += ` (due ${t.dueDate})`;
+            out += `\n`;
+            // Show latest comment for context on WIP tickets
+            if (t.comments && t.comments.length > 0) {
+              const latest = t.comments[t.comments.length - 1];
+              const preview = (latest.body || '').substring(0, 120);
+              out += `         Latest comment (${latest.author}): ${preview}...\n`;
+            }
+          }
+          out += `\n`;
+        }
+
+        // === Not Started ===
+        if (notStarted.length > 0) {
+          out += `NOT STARTED (${notStarted.length}):\n`;
+          for (const t of notStarted) {
+            const tag = newKeys.has(t.key) ? '[new] ' : '      ';
+            out += `  ${tag}${t.key}: ${t.summary} [${t.priority}]${t.dueDate ? ` (due ${t.dueDate})` : ''}\n`;
+          }
+          out += `\n`;
+        }
+
+        // === Carry forward from yesterday ===
+        if (yesterdayReport.length > 0) {
+          out += `CARRIED FROM YESTERDAY:\n`;
+          for (const item of yesterdayReport) out += `  - ${item}\n`;
+          out += `\n`;
+        }
+
+        // === Memory Context ===
+        try {
+          const memCtx = MemoryManager.getContextForToday();
+          if (memCtx.activeDecisions.length > 0) {
+            out += `ACTIVE DECISIONS (${memCtx.activeDecisions.length}):\n`;
+            for (const d of memCtx.activeDecisions.slice(0, 5)) {
+              const relTickets = d.relatedTickets.length > 0 ? ` [${d.relatedTickets.join(', ')}]` : '';
+              out += `  - ${d.text}${relTickets}\n`;
+            }
+            out += `\n`;
+          }
+          // Show notes for in-progress tickets
+          let anyNotes = false;
+          for (const t of inProgress) {
+            const ticketNotes = MemoryManager.getTicketNotes(t.key);
+            if (ticketNotes.length > 0) {
+              const latest = ticketNotes[ticketNotes.length - 1];
+              out += `  Note on ${t.key}: "${latest.text}" (${latest.timestamp.substring(0, 10)})\n`;
+              anyNotes = true;
+            }
+          }
+          if (anyNotes) out += `\n`;
+        } catch (memErr) {
+          // Non-fatal — memory is optional
+          Logger.debug('Memory context unavailable for plan_my_day', { error: memErr.message });
+        }
+
+        // === Today's Recommended Plan ===
+        out += `${'='.repeat(60)}\n`;
+        out += `TODAY'S RECOMMENDED PLAN:\n\n`;
+        let step = 1;
+
+        if (blocked.length > 0) {
+          out += `${step++}. UNBLOCK: Resolve blockers on ${blocked.map(t => t.key).join(', ')} — check linked issues or escalate\n`;
+        }
+        if (overdue.length > 0) {
+          const overdueNotBlocked = overdue.filter(t => !blocked.includes(t));
+          if (overdueNotBlocked.length > 0) {
+            out += `${step++}. URGENT: Finish overdue ${overdueNotBlocked.map(t => t.key).join(', ')}\n`;
+          }
+        }
+        if (inProgress.length > 0) {
+          const wipNotOverdue = inProgress.filter(t => !overdue.includes(t));
+          if (wipNotOverdue.length > 0) {
+            out += `${step++}. CONTINUE: ${wipNotOverdue[0].key} — ${wipNotOverdue[0].summary}\n`;
+          }
+        }
+        if (highPriority.length > 0) {
+          const highNotStartedYet = highPriority.filter(t => t.status !== "In Progress" && !overdue.includes(t) && !blocked.includes(t));
+          if (highNotStartedYet.length > 0) {
+            out += `${step++}. NEXT: Pick up high priority ${highNotStartedYet[0].key} — ${highNotStartedYet[0].summary}\n`;
+          }
+        }
+        if (newTickets.length > 0) {
+          const newNotCovered = newTickets.filter(t => !inProgress.some(ip => ip.key === t.key) && !overdue.some(od => od.key === t.key));
+          if (newNotCovered.length > 0) {
+            out += `${step++}. REVIEW: Check newly assigned ${newNotCovered.map(t => t.key).join(', ')} — read descriptions and plan\n`;
+          }
+        }
+
+        out += `\n--- Say a ticket key to dive deep, or "let's start" to begin with #1 ---\n`;
+
         return this.textResponse(out);
       }
 

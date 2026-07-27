@@ -8,6 +8,7 @@ const { promisify } = require('util');
 const {
   GIT_DEFAULT_SINCE, GIT_MAX_BUFFER,
   GIT_SHORT_HASH_LENGTH, GIT_LOG_FORMAT, TICKET_ID_PATTERN,
+  DIFF_MAX_COMMITS, DIFF_MAX_LINES_PER_COMMIT, DIFF_SUMMARY_MAX_FILES,
 } = require('../Constants/constants');
 const { GitError } = require('./errors');
 const Logger = require('./logger');
@@ -116,6 +117,139 @@ class GitUtils {
       }
     }
     return linked;
+  }
+
+  // ── Commit content analysis ────────────────────────────────────────────
+
+  /**
+   * Get diff stats for a single commit: files changed, insertions, deletions.
+   * Returns { files: [{path, insertions, deletions}], totalInsertions, totalDeletions }
+   */
+  static async getCommitDiffStats(commitHash, repoPath = process.cwd()) {
+    try {
+      const { stdout } = await execFileAsync('git', [
+        '-C', repoPath,
+        'diff-tree', '--no-commit-id', '--numstat', '-r', commitHash,
+      ], { maxBuffer: GIT_MAX_BUFFER });
+
+      if (!stdout.trim()) return { files: [], totalInsertions: 0, totalDeletions: 0 };
+
+      const files = [];
+      let totalInsertions = 0;
+      let totalDeletions = 0;
+
+      for (const line of stdout.trim().split('\n').filter(Boolean)) {
+        const [ins, del, filePath] = line.split('\t');
+        const insertions = ins === '-' ? 0 : parseInt(ins, 10) || 0;
+        const deletions = del === '-' ? 0 : parseInt(del, 10) || 0;
+        files.push({ path: filePath, insertions, deletions });
+        totalInsertions += insertions;
+        totalDeletions += deletions;
+      }
+
+      return { files: files.slice(0, DIFF_SUMMARY_MAX_FILES), totalInsertions, totalDeletions };
+    } catch (error) {
+      Logger.debug('Failed to get commit diff stats', { hash: commitHash, error: error.message });
+      return { files: [], totalInsertions: 0, totalDeletions: 0 };
+    }
+  }
+
+  /**
+   * Get the actual diff content (patch) for a single commit, truncated to max lines.
+   * Returns the raw diff string.
+   */
+  static async getCommitDiff(commitHash, repoPath = process.cwd()) {
+    try {
+      const { stdout } = await execFileAsync('git', [
+        '-C', repoPath,
+        'show', '--format=', '--stat', '--patch', commitHash,
+      ], { maxBuffer: GIT_MAX_BUFFER });
+
+      if (!stdout.trim()) return '';
+
+      const lines = stdout.split('\n');
+      if (lines.length > DIFF_MAX_LINES_PER_COMMIT) {
+        return lines.slice(0, DIFF_MAX_LINES_PER_COMMIT).join('\n') +
+          `\n... (truncated, ${lines.length - DIFF_MAX_LINES_PER_COMMIT} more lines)`;
+      }
+      return stdout;
+    } catch (error) {
+      Logger.debug('Failed to get commit diff', { hash: commitHash, error: error.message });
+      return '';
+    }
+  }
+
+  /**
+   * Get enriched commits with diff stats for a time period.
+   * Each commit gets: { ...commit, diffStats: { files, totalInsertions, totalDeletions } }
+   */
+  static async getCommitsWithDiffs(since = GIT_DEFAULT_SINCE, repoPath = process.cwd()) {
+    const commits = await this.getRecentCommits(since, repoPath);
+    const limited = commits.slice(0, DIFF_MAX_COMMITS);
+
+    const enriched = [];
+    for (const commit of limited) {
+      const diffStats = await this.getCommitDiffStats(commit.fullHash, repoPath);
+      enriched.push({ ...commit, diffStats });
+    }
+
+    return enriched;
+  }
+
+  /**
+   * Analyze what areas of the codebase were worked on.
+   * Groups files by directory/module and returns a summary.
+   * Returns { areas: { "src/auth": { files, insertions, deletions } }, topFiles: [...] }
+   */
+  static async analyzeWorkAreas(since = GIT_DEFAULT_SINCE, repoPath = process.cwd()) {
+    const commits = await this.getCommitsWithDiffs(since, repoPath);
+
+    const areaMap = {};   // dir → { files: Set, insertions, deletions, commits }
+    const fileMap = {};   // file → { insertions, deletions, commitCount }
+
+    for (const commit of commits) {
+      for (const file of commit.diffStats.files) {
+        // Extract area (first 2 path segments, or just directory)
+        const parts = file.path.split('/');
+        const area = parts.length > 1 ? parts.slice(0, 2).join('/') : parts[0];
+
+        if (!areaMap[area]) areaMap[area] = { files: new Set(), insertions: 0, deletions: 0, commits: 0 };
+        areaMap[area].files.add(file.path);
+        areaMap[area].insertions += file.insertions;
+        areaMap[area].deletions += file.deletions;
+        areaMap[area].commits++;
+
+        if (!fileMap[file.path]) fileMap[file.path] = { insertions: 0, deletions: 0, commitCount: 0 };
+        fileMap[file.path].insertions += file.insertions;
+        fileMap[file.path].deletions += file.deletions;
+        fileMap[file.path].commitCount++;
+      }
+    }
+
+    // Convert Sets to counts and sort areas by total changes
+    const areas = {};
+    for (const [area, data] of Object.entries(areaMap)) {
+      areas[area] = {
+        fileCount: data.files.size,
+        insertions: data.insertions,
+        deletions: data.deletions,
+        commits: data.commits,
+      };
+    }
+
+    // Top files by total changes
+    const topFiles = Object.entries(fileMap)
+      .map(([path, stats]) => ({ path, ...stats, totalChanges: stats.insertions + stats.deletions }))
+      .sort((a, b) => b.totalChanges - a.totalChanges)
+      .slice(0, 10);
+
+    return {
+      totalCommits: commits.length,
+      areas,
+      topFiles,
+      totalInsertions: commits.reduce((sum, c) => sum + c.diffStats.totalInsertions, 0),
+      totalDeletions: commits.reduce((sum, c) => sum + c.diffStats.totalDeletions, 0),
+    };
   }
 
   // ── Internal helpers ──────────────────────────────────────────────────
