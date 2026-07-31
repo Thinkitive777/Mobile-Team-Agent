@@ -42,6 +42,8 @@ const GitSkill = require("../Skills/GitSkill");
 const FigmaSkill = require("../Skills/FigmaSkill");
 const MemorySkill = require("../Skills/MemorySkill");
 const LegacySkill = require("../Skills/LegacySkill");
+const RNProjectSkill = require("../Skills/RNProjectSkill");
+const CodeReviewSkill = require("../Skills/CodeReviewSkill");
 
 const registry = new SkillRegistry();
 registry.register(new SetupSkill());
@@ -52,6 +54,8 @@ registry.register(new GitSkill());
 registry.register(new FigmaSkill());
 registry.register(new MemorySkill());
 registry.register(new LegacySkill());
+registry.register(new RNProjectSkill());
+registry.register(new CodeReviewSkill());
 
 // ── Tool definitions ────────────────────────────────────────────────────
 
