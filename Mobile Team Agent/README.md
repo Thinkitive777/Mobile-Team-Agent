@@ -1,6 +1,6 @@
 # 🚀 Mobile Team Agent
 
-> **v3.4.2** — Context-aware, memory-driven developer assistant with Jira + Git integration, smart ticket guidance, persistent preferences, intelligent workflow automation, Figma design-to-code, React Native project setup, and deep code review.
+> **v3.4.6** — Context-aware, memory-driven developer assistant with Jira + Git integration, smart ticket guidance, persistent preferences, intelligent workflow automation, Figma design-to-code, React Native project setup, and deep code review.
 
 The **Mobile Team Agent** is an MCP (Model Context Protocol) server that plugs into **Claude CLI**. It gives Claude a full suite of tools for mobile developers — Jira ticketing, Git insights, Figma design reading, RN project scaffolding, code review, and persistent memory — all accessible via natural language.
 
@@ -15,7 +15,24 @@ npm install -g mobile-team-agent
 npx mobile-team-agent setup
 ```
 
-`setup` automatically registers the MCP server with Claude CLI globally and installs the agent instructions to `~/.claude/CLAUDE.md`.
+`setup` does three things automatically:
+1. Registers the MCP server with Claude CLI globally (`~/.claude/settings.json`)
+2. Installs agent instructions to `~/.claude/CLAUDE.md`
+3. Writes a `CLAUDE.md` into your **current project folder** with agent rules, daily workflow shortcuts, Change Safety Protocol, and memory shortcuts
+
+> ⚠️ **Important:** Run `setup` from inside your project directory so the `CLAUDE.md` is created in the right place:
+> ```bash
+> cd /path/to/your/project
+> npx mobile-team-agent setup
+> ```
+
+**If your project already has a `CLAUDE.md`**, the agent block is safely appended between markers — your existing content is never touched.
+
+**To add the agent to another project** later, just run setup from that project's root:
+```bash
+cd /path/to/another/project
+npx mobile-team-agent setup
+```
 
 ### Option 2 — Clone & install
 
