@@ -617,10 +617,10 @@ class WorkflowSkill extends BaseSkill {
         if (!hasAnyData && !jiraError && !gitError) {
           // Nothing done today — save minimal file and return early
           const minContent = `# Updates\n## Daily Updates — ${displayDate}\n\n---\n\n🟡 No updates for today. Would you like to pick up a task?\n`;
-          const todaysUpdatesDir = path.join(os.homedir(), 'Desktop', 'Todays Updates');
+          const generalDir = path.join(os.homedir(), 'Documents', 'MobileTeamAgent', 'General');
           try {
-            if (!fs.existsSync(todaysUpdatesDir)) fs.mkdirSync(todaysUpdatesDir, { recursive: true });
-            const fp = path.join(todaysUpdatesDir, `${filenameDatePart}_updates.md`);
+            if (!fs.existsSync(generalDir)) fs.mkdirSync(generalDir, { recursive: true });
+            const fp = path.join(generalDir, `${filenameDatePart}_updates.md`);
             fs.writeFileSync(fp, minContent, { encoding: 'utf-8' });
           } catch (_) { /* best effort */ }
           return this.textResponse(`No updates for today. Would you like to pick up a task?`);
@@ -712,21 +712,33 @@ class WorkflowSkill extends BaseSkill {
           content += `\n*************\n\n`;
         }
 
-        // Save to ~/Desktop/Todays Updates/DD-MM-YYYY_updates.md
-        const todaysUpdatesDir = path.join(os.homedir(), 'Desktop', 'Todays Updates');
-        let reportFilePath = null;
+        // Save per-project files to ~/Documents/MobileTeamAgent/<ProjectName>/DD-MM-YYYY_updates.md
+        const baseUpdatesDir = path.join(os.homedir(), 'Documents', 'MobileTeamAgent');
+        const savedPaths = [];
         let saveError = null;
         try {
-          if (!fs.existsSync(todaysUpdatesDir)) {
-            fs.mkdirSync(todaysUpdatesDir, { recursive: true });
+          for (const proj of allProjects) {
+            const projName = activeProjectKey && allProjects.length === 1 ? activeProjectKey : proj;
+            const safe = projName.replace(/[^a-zA-Z0-9_\-]/g, '_');
+            const projDir = path.join(baseUpdatesDir, safe);
+            if (!fs.existsSync(projDir)) fs.mkdirSync(projDir, { recursive: true });
+
+            // Extract just this project's content block from the full content string
+            const projDisplayName = activeProjectKey && allProjects.length === 1 ? activeProjectKey : proj;
+            const blockStart = content.indexOf(`# ProjectName: ${projDisplayName} Updates`);
+            const nextBlock = content.indexOf(`# ProjectName:`, blockStart + 1);
+            const projContent = nextBlock === -1 ? content.slice(blockStart) : content.slice(blockStart, nextBlock);
+
+            const filePath = path.join(projDir, `${filenameDatePart}_updates.md`);
+            fs.writeFileSync(filePath, projContent, { encoding: 'utf-8' });
+            savedPaths.push(filePath);
+            Logger.info('Daily updates saved', { path: filePath });
           }
-          reportFilePath = path.join(todaysUpdatesDir, `${filenameDatePart}_updates.md`);
-          fs.writeFileSync(reportFilePath, content, { encoding: 'utf-8' });
-          Logger.info('Daily updates saved', { path: reportFilePath });
         } catch (err) {
           saveError = err.message;
-          Logger.error('Failed to save daily updates', { error: err.message, dir: todaysUpdatesDir });
+          Logger.error('Failed to save daily updates', { error: err.message, dir: baseUpdatesDir });
         }
+        const reportFilePath = savedPaths.length > 0 ? savedPaths[0] : null;
 
         let out = `Daily Updates — ${displayDate}\n\n`;
         if (reportFilePath && !saveError) {

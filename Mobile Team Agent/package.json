@@ -1,9 +1,11 @@
 {
   "name": "mobile-team-agent",
-  "version": "3.4.0",
+  "version": "3.4.1",
   "description": "Context-aware, memory-driven developer assistant with Jira + Git integration, smart ticket guidance, persistent preferences, and intelligent workflow automation",
   "main": "Main/index.js",
-  "bin": "Main/index.js",
+  "bin": {
+    "mobile-team-agent": "Main/index.js"
+  },
   "scripts": {
     "start": "node Main/index.js",
     "build": "pkg . --out-path dist/",

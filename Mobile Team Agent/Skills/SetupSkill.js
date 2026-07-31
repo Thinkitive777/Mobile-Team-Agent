@@ -120,6 +120,35 @@ class SetupSkill extends BaseSkill {
         } else {
           out += `Figma: not configured (optional). Use 'configure_figma' to enable design reading.\n`;
         }
+
+        // Scan ~/Documents/MobileTeamAgent/ for recent project reports to get back in context fast
+        const fs = require('fs');
+        const path = require('path');
+        const os = require('os');
+        const docsDir = path.join(os.homedir(), 'Documents', 'MobileTeamAgent');
+        if (fs.existsSync(docsDir)) {
+          const projectFolders = fs.readdirSync(docsDir, { withFileTypes: true })
+            .filter(d => d.isDirectory())
+            .map(d => d.name);
+
+          if (projectFolders.length > 0) {
+            out += `\n--- Recent Project Reports (~/Documents/MobileTeamAgent/) ---\n`;
+            for (const proj of projectFolders) {
+              const projDir = path.join(docsDir, proj);
+              const files = fs.readdirSync(projDir)
+                .filter(f => f.endsWith('_updates.md'))
+                .sort()
+                .reverse(); // newest first
+              if (files.length > 0) {
+                const latest = files[0];
+                const datePart = latest.replace('_updates.md', ''); // DD-MM-YYYY
+                out += `  ${proj}: last report ${datePart} (${files.length} total)\n`;
+              }
+            }
+            out += `Use 'get_daily_report' or 'get_consolidated_summary' to review past work.\n`;
+          }
+        }
+
         return this.textResponse(out);
       }
 
@@ -185,8 +214,8 @@ class SetupSkill extends BaseSkill {
         out += `Saved: ${reportCount} daily report(s)\n`;
         out += `Directory: ${ReportManager.REPORTS_DIR}\n`;
         if (desktopProjects.length > 0) {
-          out += `Desktop project reports: ${desktopProjects.join(', ')}\n`;
-          out += `Desktop directory: ${ReportManager.DESKTOP_UPDATES_DIR}\n`;
+          out += `Project reports: ${desktopProjects.join(', ')}\n`;
+          out += `Reports directory: ${ReportManager.DESKTOP_UPDATES_DIR}\n`;
         }
         out += `\n`;
 

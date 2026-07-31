@@ -23,9 +23,9 @@ module.exports = Object.freeze({
   CONFIG_FILE_PERMISSIONS: 0o600,
   REPORT_FILE_PERMISSIONS: 0o600,
 
-  // Desktop project-based update storage
+  // Project-based update storage (Documents/MobileTeamAgent/<ProjectName>/)
   DESKTOP_DIR: path.join(os.homedir(), 'Desktop'),
-  DESKTOP_UPDATES_DIR: path.join(os.homedir(), 'Desktop', 'Todays Updates'),
+  DESKTOP_UPDATES_DIR: path.join(os.homedir(), 'Documents', 'MobileTeamAgent'),
 
   // Jira API
   JIRA_MAX_RESULTS: 50,
