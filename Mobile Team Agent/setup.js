@@ -168,7 +168,7 @@ try {
     (h) => h._id !== 'mobile-team-agent-safety'
   );
 
-  // PreToolUse — fires BEFORE every edit, enforces risk assessment upfront
+  // PreToolUse — fires BEFORE every edit, non-blocking reminder to note risk level
   settings.hooks.PreToolUse.push({
     _id: 'mobile-team-agent-pre-safety',
     matcher: 'Edit|Write|MultiEdit',
@@ -176,23 +176,15 @@ try {
       {
         type: 'prompt',
         prompt:
-          'You are about to edit or create a file. You MUST perform a Risk Assessment BEFORE proceeding.\n\n' +
-          'State the following inline RIGHT NOW before making any changes:\n\n' +
-          '🔍 Risk Assessment: 🟢 LOW / 🟡 MEDIUM / 🔴 HIGH\n' +
-          'Reason: <why this risk level — what specifically is being changed>\n' +
-          'Affected: <file(s) and which tools/features they impact>\n' +
-          'Dependencies: <other files/services that may be affected>\n' +
-          'Breaking: <yes/no — are any existing tool names, required params, or APIs being changed>\n\n' +
-          'Risk level guide:\n' +
-          '🟢 LOW    — Docs, comments, README, non-functional text\n' +
-          '🟡 MEDIUM — Logic change in one tool/skill, new optional param, new file with no existing impact\n' +
-          '🔴 HIGH   — MCP tool signature change, shared service (jira-client/config-manager/memory-manager), index.js, SkillRegistry.js, package.json deps, install/setup scripts\n\n' +
-          'Do NOT proceed with the edit until the risk assessment is shown.',
+          'NOTE: Before this edit, include a one-line risk note in your response: ' +
+          '"🔍 Risk: 🟢/🟡/🔴 — <reason>". Then continue your task immediately without stopping or waiting. ' +
+          'Guide: 🟢 LOW = docs/README | 🟡 MEDIUM = logic/new file | 🔴 HIGH = tool signature/shared service/package.json. ' +
+          'Do not pause, do not ask for permission, just note and proceed.',
       },
     ],
   });
 
-  // PostToolUse — fires AFTER every edit, enforces impact summary + commit gate
+  // PostToolUse — fires AFTER all edits, non-blocking summary reminder
   settings.hooks.PostToolUse.push({
     _id: 'mobile-team-agent-safety',
     matcher: 'Edit|Write|MultiEdit',
@@ -200,32 +192,11 @@ try {
       {
         type: 'prompt',
         prompt:
-          'A file was just edited or created. You MUST now provide the full Impact Summary:\n\n' +
-          '## 📋 Change Summary\n' +
-          '**What changed:** <one-line description>\n' +
-          '**Files modified:** <list>\n' +
-          '**Risk level:** 🟢/🟡/🔴\n\n' +
-          '### Impact\n' +
-          '- What behaviour changed and why\n' +
-          '- What stays the same\n' +
-          '- Side effects on other tools or files\n\n' +
-          '### How to Test\n' +
-          '#### Automated\n' +
-          '- [ ] npm run validate\n' +
-          '- [ ] npm test\n' +
-          '- [ ] <specific command for changed area>\n\n' +
-          '#### Manual (in Claude CLI)\n' +
-          '- [ ] <exact phrase to trigger the changed tool>\n' +
-          '- [ ] <what to verify in the response>\n' +
-          '- [ ] <edge case to check>\n\n' +
-          '### Test Cases\n' +
-          '| # | Input | Expected Output | Pass? |\n' +
-          '|---|-------|----------------|-------|\n' +
-          '| 1 | <happy path> | <expected> | ☐ |\n' +
-          '| 2 | <edge case> | <expected> | ☐ |\n' +
-          '| 3 | <failure case> | <error/fallback> | ☐ |\n\n' +
-          'Then ask: "Would you like me to save this summary to README / TESTING.md, or keep it here? And shall I commit these changes?"\n\n' +
-          'NEVER commit without explicit developer confirmation.',
+          'NOTE: After completing all your edits (not between each file), include this in your final response: ' +
+          '(1) one-line change summary + risk level, (2) impact bullets, (3) automated and manual test steps, ' +
+          '(4) 3-row test cases table. Then ask: "Save to TESTING.md? And shall I commit?" ' +
+          '— do NOT run git commit until developer explicitly confirms. ' +
+          'Continue any remaining work first before showing this summary.',
       },
     ],
   });

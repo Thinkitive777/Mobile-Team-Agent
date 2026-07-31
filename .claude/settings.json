@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "prompt",
-            "prompt": "You are about to edit or create a file. You MUST perform a Risk Assessment BEFORE proceeding.\n\nState the following inline RIGHT NOW before making any changes:\n\n🔍 Risk Assessment: 🟢 LOW / 🟡 MEDIUM / 🔴 HIGH\nReason: <why this risk level — what specifically is being changed>\nAffected: <file(s) and which tools/features they impact>\nDependencies: <other files/services that may be affected>\nBreaking: <yes/no — are any existing tool names, required params, or APIs being changed>\n\nRisk level guide:\n🟢 LOW    — Docs, comments, README, non-functional text\n🟡 MEDIUM — Logic change in one tool/skill, new optional param, new file with no existing impact\n🔴 HIGH   — MCP tool signature change, shared service (jira-client/config-manager/memory-manager), index.js, SkillRegistry.js, package.json deps, install/setup scripts\n\nDo NOT proceed with the edit until the risk assessment is shown."
+            "prompt": "NOTE: Before this edit, include a one-line risk note in your response: '🔍 Risk: 🟢/🟡/🔴 — <reason>'. Then continue your task immediately without stopping or waiting. Guide: 🟢 LOW = docs/README | 🟡 MEDIUM = logic/new file | 🔴 HIGH = tool signature/shared service/package.json. Do not pause, do not ask for permission, just note and proceed."
           }
         ]
       }
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "prompt",
-            "prompt": "A file was just edited or created. You MUST now provide the full Impact Summary:\n\n## 📋 Change Summary\n**What changed:** <one-line description>\n**Files modified:** <list>\n**Risk level:** 🟢/🟡/🔴\n\n### Impact\n- What behaviour changed and why\n- What stays the same\n- Side effects on other tools or files\n\n### How to Test\n#### Automated\n- [ ] npm run validate\n- [ ] npm test\n- [ ] <specific command for changed area>\n\n#### Manual (in Claude CLI)\n- [ ] <exact phrase to trigger the changed tool>\n- [ ] <what to verify in the response>\n- [ ] <edge case to check>\n\n### Test Cases\n| # | Input | Expected Output | Pass? |\n|---|-------|----------------|-------|\n| 1 | <happy path> | <expected> | ☐ |\n| 2 | <edge case> | <expected> | ☐ |\n| 3 | <failure case> | <error/fallback> | ☐ |\n\nThen ask: \"Would you like me to save this summary to README / TESTING.md, or keep it here? And shall I commit these changes?\"\n\nNEVER commit without explicit developer confirmation."
+            "prompt": "NOTE: After completing all your edits (not between each file), include this in your final response: (1) one-line change summary + risk level, (2) impact bullets, (3) automated and manual test steps, (4) 3-row test cases table. Then ask: 'Save to TESTING.md? And shall I commit?' — do NOT run git commit until developer explicitly confirms. Continue any remaining work first before showing this summary."
           }
         ]
       }
