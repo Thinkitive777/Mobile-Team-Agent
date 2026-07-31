@@ -740,6 +740,38 @@ class WorkflowSkill extends BaseSkill {
         }
         const reportFilePath = savedPaths.length > 0 ? savedPaths[0] : null;
 
+        // Save session snapshot for next-day context
+        try {
+          const inProgressTickets = allTickets
+            .filter(t => t.status === "In Progress")
+            .map(t => ({ key: t.key, summary: t.summary, lastNote: null }));
+          const pendingList = allTickets
+            .filter(t => t.status === "To Do" || t.status === "Open" || t.status === "Backlog" || t.status === "Selected for Development")
+            .map(t => ({ key: t.key, summary: t.summary }));
+          const blockedList = allTickets
+            .filter(t => t.status === "Blocked" || t.status === "On Hold" || t.status === "Impediment")
+            .map(t => ({ key: t.key, summary: t.summary, reason: t.status }));
+          const completedList = completedTickets.map(t => ({ key: t.key, summary: t.summary }));
+          const nextFocus = inProgressTickets.length > 0
+            ? `Continue ${inProgressTickets[0].key} — ${inProgressTickets[0].summary}`
+            : (pendingList.length > 0 ? `Pick up ${pendingList[0].key} — ${pendingList[0].summary}` : null);
+          const activeProject = activeProjectKey || allProjects[0] || 'General';
+
+          MemoryManager.saveSessionSnapshot({
+            projectName: activeProject,
+            inProgressTickets,
+            pendingTickets: pendingList,
+            blockedTickets: blockedList,
+            completedToday: completedList,
+            journalEntries: [],
+            decisions: [],
+            commits: commits.slice(0, 10).map(c => `${c.hash ? c.hash.slice(0,7) : ''} ${c.message || c.subject || ''}`),
+            nextFocus,
+          });
+        } catch (snapshotErr) {
+          Logger.debug('Session snapshot save failed', { error: snapshotErr.message });
+        }
+
         let out = `Daily Updates — ${displayDate}\n\n`;
         if (reportFilePath && !saveError) {
           out += `Saved to: ${reportFilePath}\n\n`;

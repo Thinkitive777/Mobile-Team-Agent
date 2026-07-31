@@ -125,6 +125,7 @@ class SetupSkill extends BaseSkill {
         const fs = require('fs');
         const path = require('path');
         const os = require('os');
+        const MemoryManager = require('../Services/memory-manager');
         const docsDir = path.join(os.homedir(), 'Documents', 'MobileTeamAgent');
         if (fs.existsSync(docsDir)) {
           const projectFolders = fs.readdirSync(docsDir, { withFileTypes: true })
@@ -147,6 +148,19 @@ class SetupSkill extends BaseSkill {
             }
             out += `Use 'get_daily_report' or 'get_consolidated_summary' to review past work.\n`;
           }
+        }
+
+        // Load session snapshot for next-day context
+        try {
+          const activeProj = config.jira.active_project || 'General';
+          const snapshot = MemoryManager.loadSessionSnapshot(activeProj);
+          if (snapshot) {
+            out += `\n--- Session Snapshot (pick up where you left off) ---\n`;
+            out += snapshot;
+            out += `\n`;
+          }
+        } catch (snapErr) {
+          // best-effort, never block startup
         }
 
         return this.textResponse(out);

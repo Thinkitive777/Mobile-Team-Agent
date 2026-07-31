@@ -1,8 +1,8 @@
 # 🚀 Mobile Team Agent
 
-> **v3.4.6** — Context-aware, memory-driven developer assistant with Jira + Git integration, smart ticket guidance, persistent preferences, intelligent workflow automation, Figma design-to-code, React Native project setup, and deep code review.
+> **v3.4.8** — Context-aware, memory-driven developer assistant with Jira + Git integration, smart ticket guidance, persistent preferences, intelligent workflow automation, Figma design-to-code, React Native project setup, deep code review, unit test generation, and session memory across days.
 
-The **Mobile Team Agent** is an MCP (Model Context Protocol) server that plugs into **Claude CLI**. It gives Claude a full suite of tools for mobile developers — Jira ticketing, Git insights, Figma design reading, RN project scaffolding, code review, and persistent memory — all accessible via natural language.
+The **Mobile Team Agent** is an MCP (Model Context Protocol) server that plugs into **Claude CLI**. It gives Claude a full suite of tools for mobile developers — Jira ticketing, Git insights, Figma design reading, RN project scaffolding, code review, unit test generation, and persistent memory — all accessible via natural language.
 
 ---
 
@@ -12,19 +12,21 @@ The **Mobile Team Agent** is an MCP (Model Context Protocol) server that plugs i
 
 ```bash
 npm install -g mobile-team-agent
+```
+
+Then run setup **from inside your project directory:**
+
+```bash
+cd /path/to/your/project
 npx mobile-team-agent setup
 ```
+
+> ⚠️ **Always `cd` into your project first.** Setup writes a `CLAUDE.md` into the current directory so Claude knows the agent rules for that project.
 
 `setup` does three things automatically:
 1. Registers the MCP server with Claude CLI globally (`~/.claude/settings.json`)
 2. Installs agent instructions to `~/.claude/CLAUDE.md`
 3. Writes a `CLAUDE.md` into your **current project folder** with agent rules, daily workflow shortcuts, Change Safety Protocol, and memory shortcuts
-
-> ⚠️ **Important:** Run `setup` from inside your project directory so the `CLAUDE.md` is created in the right place:
-> ```bash
-> cd /path/to/your/project
-> npx mobile-team-agent setup
-> ```
 
 **If your project already has a `CLAUDE.md`**, the agent block is safely appended between markers — your existing content is never touched.
 
@@ -61,10 +63,10 @@ claude
 ```
 
 Activate the agent:
-- `"invoke mobile-team-agent"` — activates and shows connection status
+- `"invoke mobile-team-agent"` — activates, shows connection status, and surfaces your last session context
 - `"Good morning"` / `"hi"` / `"start my day"` — morning standup
 - `"plan my day"` — deep daily planning
-- `"end of day"` / `"EOD"` — generate daily report
+- `"end of day"` / `"EOD"` — generate daily report + save session snapshot
 
 ---
 
@@ -100,7 +102,7 @@ Git is auto-detected from the current directory — no setup needed.
 
 | Tool | What it does | Say |
 |------|-------------|-----|
-| `invoke_mobile_team` | Activates the agent, scans project reports | `"invoke mobile-team-agent"` |
+| `invoke_mobile_team` | Activates the agent, scans project reports, restores last session context | `"invoke mobile-team-agent"` |
 | `get_setup_status` | Shows connected integrations and saved preferences | `"check connection status"` |
 | `configure_service` | Save Jira credentials (per project) | `"configure Jira"` |
 | `switch_jira_project` | Switch active Jira project context | `"switch to MyApp project"` |
@@ -156,11 +158,11 @@ Git is auto-detected from the current directory — no setup needed.
 |------|-------------|---------|
 | `morning_standup` | Today's tickets, recent commits, priorities | Greeting: `"hi"`, `"good morning"`, `"start my day"` |
 | `plan_my_day` | Deep plan: new/pending/blocked/overdue, comment context, code activity, yesterday's work | `"plan my day"` / `"what should I focus on today?"` |
-| `end_of_day_report` | Generate + save EOD summary to `~/Documents/MobileTeamAgent/<Project>/DD-MM-YYYY_updates.md` | `"end of day"` / `"EOD"` / `"wrap up"` |
+| `end_of_day_report` | Generate + save EOD summary and session snapshot | `"end of day"` / `"EOD"` / `"wrap up"` |
 | `get_daily_report` | Retrieve a saved report for a specific date | `"show report for 2024-01-15"` |
 | `list_daily_reports` | Browse all saved daily reports | `"list my reports"` |
 | `weekly_summary` | Weekly rollup across all work | `"weekly summary"` |
-| `get_consolidated_summary` | Cross-project daily summary from all Desktop project folders | `"all projects today"` |
+| `get_consolidated_summary` | Cross-project daily summary from all project folders | `"all projects today"` |
 
 > **Reports** are saved per-project to `~/Documents/MobileTeamAgent/<ProjectName>/DD-MM-YYYY_updates.md`
 
@@ -180,6 +182,26 @@ Git is auto-detected from the current directory — no setup needed.
 | `resolve_decision` | Mark a decision resolved | `"resolve decision about state management"` |
 | `forget` | Delete a stored memory entry | `"forget that note"` |
 | `memory_status` | Show memory usage stats | `"memory status"` |
+
+#### 🔁 Session Snapshot (Next-Day Context)
+
+At the end of every `end_of_day_report` and `plan_my_day`, the agent automatically saves a **session snapshot** to:
+
+```
+~/Documents/MobileTeamAgent/<ProjectName>/session_snapshot.md
+```
+
+It contains:
+- 🟠 In-progress tickets (with last saved note)
+- ✅ Completed today
+- 📋 Pending / next up
+- 🚫 Blocked tickets
+- 💻 Today's commits
+- 📓 Journal entries
+- 🤝 Open decisions
+- 🎯 Where to pick up tomorrow
+
+When you say `"invoke mobile-team-agent"` or `"good morning"` next day, this snapshot is loaded automatically so Claude knows exactly where to pick up — no re-explaining needed.
 
 ---
 
@@ -243,25 +265,91 @@ Git is auto-detected from the current directory — no setup needed.
 | `check_breaking_changes` | What could break on merge: major package bumps, deleted files, type changes, nav route changes, native code, service/store changes | `"will this break anything?"` / `"is it safe to merge?"` |
 | `detect_rn_issues` | Scan a file or full branch diff for RN anti-patterns | `"scan for RN issues in LoginScreen.tsx"` / `"detect issues in my branch"` |
 
-**RN issues detected by `detect_rn_issues`:**
+**What `detect_rn_issues` checks:**
 
-| Severity | Issue |
-|----------|-------|
-| CRITICAL | Untyped navigation calls (raw string routes) |
-| CRITICAL | AsyncStorage without await / promise handling |
-| CRITICAL | Async setState after unmount (memory leak) |
-| HIGH | `useEffect` with empty deps (stale closure risk) |
-| HIGH | `FlatList` without `keyExtractor` |
-| HIGH | `console.log` left in code |
-| HIGH | Empty `catch` blocks |
-| MEDIUM | Inline styles (performance) |
-| MEDIUM | Hardcoded colors (maintainability) |
-| MEDIUM | Missing `ActivityIndicator` during async ops |
-| LOW | Missing `accessibilityLabel` on touchables |
+| Severity | Category | Examples |
+|----------|----------|---------|
+| CRITICAL | Navigation | Untyped navigation calls (raw string routes) |
+| CRITICAL | Async | AsyncStorage without await, async setState after unmount |
+| CRITICAL | Promises | `.then()` without `.catch()` |
+| HIGH | Hooks | `useEffect` with empty deps (stale closure), direct API in `useEffect` |
+| HIGH | Lists | `FlatList` without `keyExtractor` |
+| HIGH | Logs | `console.log/debug/info/verbose` left in code |
+| HIGH | Errors | Empty `catch` blocks, `JSON.parse` without try-catch |
+| HIGH | UX | Missing loading/error UI, async `onPress` without disabled state |
+| HIGH | Placement | API calls directly in screen files |
+| HIGH | Libraries | Raw `fetch()` instead of axios client, full `lodash` import, `moment.js` |
+| MEDIUM | Styles | Inline style objects, hardcoded colors |
+| MEDIUM | Types | TypeScript `any` type used |
+| MEDIUM | Reuse | Magic numbers, duplicated string literals |
+| MEDIUM | State | Multiple `setState` calls in one handler |
+| MEDIUM | Lists | Missing empty state in `FlatList`/`ScrollView` |
+| LOW | Typos | 30+ common spelling mistakes in identifiers/strings |
+| LOW | Logic | Hardcoded booleans, unreachable code after return |
+| LOW | Debt | TODO/FIXME comments |
 
-**`review_branch` parameters:**
-- `target_branch` — branch to compare against (default: `main`)
-- `source_branch` — branch being reviewed (default: current branch)
+After `review_branch`, the agent asks: **"Would you like me to generate unit tests for your changed files?"**
+
+---
+
+### 🧪 Unit Tests
+
+| Tool | What it does | Say |
+|------|-------------|-----|
+| `generate_unit_tests` | Generate test files for changed files vs main. Auto-detects Jest/Vitest/Mocha, places tests correctly, runs them immediately | `"generate unit tests"` / `"generate tests for LoginScreen.tsx"` |
+| `check_test_coverage` | Run full test suite with coverage, flag files below threshold | `"check test coverage"` / `"what's my coverage?"` |
+| `run_tests` | Run the test suite or a specific file | `"run tests"` / `"run tests for LoginScreen"` |
+
+**How `generate_unit_tests` works:**
+1. Finds all changed `.ts/.tsx/.js/.jsx` files vs `main` (or a specific file you name)
+2. Auto-detects your test framework from `package.json` (Jest → Vitest → Mocha)
+3. Checks if a test file already exists — skips if so
+4. Generates a test file with: render tests, snapshot, interaction tests (from `testID`s), async tests, hook tests, utility function tests
+5. Runs the generated tests immediately and shows pass/fail
+6. Asks you to fill in the `TODO` sections with real expected values
+
+**Test file placement** — auto-detected from project structure:
+- Co-located: `LoginScreen.test.tsx` next to `LoginScreen.tsx`
+- Or in `__tests__/` folder if that pattern exists in the project
+
+**Coverage thresholds** (`check_test_coverage`):
+| Coverage | Status |
+|----------|--------|
+| 100% | ✅ Full |
+| 80–99% | 🟡 Partial |
+| 50–79% | 🟠 Low |
+| < 50% | 🔴 CRITICAL — generate tests |
+
+---
+
+## 🛡 Change Safety Protocol
+
+Every file change Claude makes goes through a mandatory safety flow:
+
+### Before every edit
+Claude states the risk level inline and proceeds immediately — no stopping:
+```
+🔍 Risk: 🟡 MEDIUM — modifying WorkflowSkill.js end_of_day_report output format
+```
+
+| Level | When |
+|-------|------|
+| 🟢 LOW | Docs, comments, README, non-functional text |
+| 🟡 MEDIUM | Logic in one skill/tool, new optional param, new file |
+| 🔴 HIGH | Tool signature change, shared service, `index.js`, `package.json`, CI/CD |
+
+### After all edits are done
+Claude provides a full impact summary:
+- What changed and why
+- What stays the same
+- Side effects on other tools
+- Automated test steps (`npm run validate`, `npm test`)
+- Manual test steps (exact Claude CLI phrases to verify)
+- Test cases table (happy path, edge case, failure case)
+
+Then asks: **"Save to TESTING.md? And shall I commit?"** — and never commits without your explicit yes.
+
+This protocol is enforced via `PreToolUse` and `PostToolUse` hooks installed into `~/.claude/settings.json` during setup.
 
 ---
 
@@ -269,25 +357,25 @@ Git is auto-detected from the current directory — no setup needed.
 
 ```
 # Morning
-"Good morning"                          → morning standup
-"plan my day"                           → deep daily plan
+"Good morning"                            → morning standup + last session context
+"plan my day"                             → deep daily plan
 
 # Tickets
-"show my tickets"                       → list open tickets
-"show CMDN tickets"                     → project-specific tickets
-"PROJ-42"                               → full details + implementation plan
-"what should I work on?"               → AI-scored suggestions
-"move PROJ-42 to In Progress"          → transition status
-"log 3h on PROJ-42"                    → log work
+"show my tickets"                         → list open tickets
+"show CMDN tickets"                       → project-specific tickets
+"PROJ-42"                                 → full details + implementation plan
+"what should I work on?"                 → AI-scored suggestions
+"move PROJ-42 to In Progress"            → transition status
+"log 3h on PROJ-42"                      → log work
 
 # Git
-"show my recent commits"               → git log with Jira links
-"what changed in commit abc1234"       → full patch details
+"show my recent commits"                 → git log with Jira links
+"what changed in commit abc1234"         → full patch details
 
 # Figma
-"show Figma screens"                   → list all frames
-"build the Login screen from Figma"   → read design + generate code
-"suggest next 5 screens to implement" → unimplemented screen suggestions
+"show Figma screens"                     → list all frames
+"build the Login screen from Figma"     → read design + generate code
+"suggest next 5 screens to implement"   → unimplemented screen suggestions
 
 # React Native
 "set up a new RN project called TaskApp with navigation and auth"
@@ -295,19 +383,25 @@ Git is auto-detected from the current directory — no setup needed.
 "what should I use for state management?"
 
 # Code Review
-"review my branch"                     → full review with risk score
-"will this break anything?"            → breaking change analysis
-"scan LoginScreen.tsx for RN issues"  → file-level issue scan
+"review my branch"                       → full review with risk score
+"will this break anything?"              → breaking change analysis
+"scan LoginScreen.tsx for RN issues"    → file-level issue scan
+
+# Unit Tests
+"generate unit tests"                    → tests for all changed files, runs immediately
+"check test coverage"                    → full coverage report
+"run tests"                              → run the test suite
 
 # Memory
 "remember: auth token stored in MMKV"
 "what did I note about auth?"
-"we decided to use Zustand"
+"I just finished the login screen"       → journal entry
+"we decided to use Zustand"              → saved decision
 "what decisions are pending?"
 
 # End of day
-"end of day"                           → generate + save EOD report
-"weekly summary"                       → weekly rollup
+"end of day"                             → EOD report + session snapshot saved
+"weekly summary"                         → weekly rollup
 ```
 
 ---
@@ -317,25 +411,26 @@ Git is auto-detected from the current directory — no setup needed.
 ```
 Mobile Team Agent/
 ├── Main/
-│   ├── index.js          # MCP server entry point
-│   └── SkillRegistry.js  # Tool registration
+│   ├── index.js            # MCP server entry point
+│   └── SkillRegistry.js    # Tool registration
 ├── Skills/
 │   ├── Core/BaseSkill.js
-│   ├── SetupSkill.js       # invoke, get_setup_status, configure_service, health_check
-│   ├── JiraReadSkill.js    # list_tickets, get_ticket_details, analyze_workload, ...
-│   ├── JiraWriteSkill.js   # transition_ticket, add_comment, create_ticket, ...
-│   ├── GitSkill.js         # get_recent_commits, get_commit_details
-│   ├── WorkflowSkill.js    # morning_standup, plan_my_day, end_of_day_report, ...
-│   ├── FigmaSkill.js       # configure_figma, list_figma_screens, read_figma_screen, ...
-│   ├── MemorySkill.js      # remember, recall, journal, add_decision, ...
-│   ├── CodeReviewSkill.js  # review_branch, detect_rn_issues, compare_with_branch, ...
-│   ├── RNProjectSkill.js   # setup_rn_project, analyze_rn_architecture, recommend_libraries
-│   └── prompts/            # Markdown prompt templates per skill
+│   ├── SetupSkill.js         # invoke, get_setup_status, configure_service, health_check
+│   ├── JiraReadSkill.js      # list_tickets, get_ticket_details, analyze_workload, ...
+│   ├── JiraWriteSkill.js     # transition_ticket, add_comment, create_ticket, ...
+│   ├── GitSkill.js           # get_recent_commits, get_commit_details
+│   ├── WorkflowSkill.js      # morning_standup, plan_my_day, end_of_day_report, ...
+│   ├── FigmaSkill.js         # configure_figma, list_figma_screens, read_figma_screen, ...
+│   ├── MemorySkill.js        # remember, recall, journal, add_decision, ...
+│   ├── CodeReviewSkill.js    # review_branch, detect_rn_issues, compare_with_branch, ...
+│   ├── RNProjectSkill.js     # setup_rn_project, analyze_rn_architecture, recommend_libraries
+│   ├── UnitTestSkill.js      # generate_unit_tests, check_test_coverage, run_tests
+│   └── prompts/              # Markdown prompt templates per skill
 ├── Services/
 │   ├── jira-client.js
 │   ├── figma-client.js
 │   ├── config-manager.js
-│   ├── memory-manager.js
+│   ├── memory-manager.js     # includes session snapshot save/load
 │   ├── report-manager.js
 │   └── offline-queue.js
 ├── Constants/constants.js
@@ -343,28 +438,28 @@ Mobile Team Agent/
 │   ├── git-utils.js
 │   ├── ticket-utils.js
 │   └── validators.js
-├── setup.js              # npx mobile-team-agent setup entry point
-├── install.sh            # Clone-based installer
+├── setup.js                  # npx mobile-team-agent setup entry point
+├── install.sh                # Clone-based installer
 ├── package.json
-└── CLAUDE.md             # Agent instructions for Claude
+└── CLAUDE.md                 # Agent instructions for Claude
 ```
 
 ---
 
-## 📊 Reports Storage
-
-EOD reports are saved per-project:
+## 📊 Storage Layout
 
 ```
 ~/Documents/MobileTeamAgent/
 ├── MyApp/
-│   ├── 31-07-2026_updates.md
-│   └── 30-07-2026_updates.md
+│   ├── 31-07-2026_updates.md       ← EOD report
+│   ├── 30-07-2026_updates.md
+│   └── session_snapshot.md         ← next-day context (auto-updated)
 ├── ShopApp/
-│   └── 31-07-2026_updates.md
+│   ├── 31-07-2026_updates.md
+│   └── session_snapshot.md
 ```
 
-`invoke_mobile_team` scans this folder on startup to surface all projects and their latest activity.
+`invoke_mobile_team` scans this folder on startup and surfaces all projects with their latest report date and session snapshot.
 
 ---
 
@@ -372,14 +467,25 @@ EOD reports are saved per-project:
 
 **Agent not responding to tools?**
 ```bash
-npx mobile-team-agent setup   # re-register
+npx mobile-team-agent setup   # re-register + refresh CLAUDE.md
 claude mcp list               # verify registration
+```
+
+**CLAUDE.md not in my project?**
+```bash
+cd /path/to/your/project
+npx mobile-team-agent setup   # writes CLAUDE.md into current directory
 ```
 
 **Jira not connecting?**
 ```
 "health check"                # run health_check tool
 "configure Jira"              # re-run configure_service
+```
+
+**Hook blocking Claude mid-task?**
+```bash
+npx mobile-team-agent setup   # updates hooks to non-blocking version
 ```
 
 **Manual MCP registration:**
@@ -395,6 +501,6 @@ The repo is source-only. Install from npm or clone and run the installer. Do **n
 
 To test locally:
 ```bash
-npm run validate    # syntax-check all 23 source files
+npm run validate    # syntax-check all source files
 npm start           # run the MCP server directly
 ```

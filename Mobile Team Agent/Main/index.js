@@ -44,6 +44,7 @@ const MemorySkill = require("../Skills/MemorySkill");
 const LegacySkill = require("../Skills/LegacySkill");
 const RNProjectSkill = require("../Skills/RNProjectSkill");
 const CodeReviewSkill = require("../Skills/CodeReviewSkill");
+const UnitTestSkill = require("../Skills/UnitTestSkill");
 
 const registry = new SkillRegistry();
 registry.register(new SetupSkill());
@@ -56,6 +57,7 @@ registry.register(new MemorySkill());
 registry.register(new LegacySkill());
 registry.register(new RNProjectSkill());
 registry.register(new CodeReviewSkill());
+registry.register(new UnitTestSkill());
 
 // ── Tool definitions ────────────────────────────────────────────────────
 
