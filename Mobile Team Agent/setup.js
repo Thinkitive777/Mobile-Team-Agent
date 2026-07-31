@@ -157,13 +157,42 @@ try {
   }
 
   if (!settings.hooks) settings.hooks = {};
+  if (!settings.hooks.PreToolUse) settings.hooks.PreToolUse = [];
   if (!settings.hooks.PostToolUse) settings.hooks.PostToolUse = [];
 
-  // Remove any existing mobile-team-agent hook entry to avoid duplicates
+  // Remove any existing mobile-team-agent hook entries to avoid duplicates
+  settings.hooks.PreToolUse = settings.hooks.PreToolUse.filter(
+    (h) => h._id !== 'mobile-team-agent-pre-safety'
+  );
   settings.hooks.PostToolUse = settings.hooks.PostToolUse.filter(
     (h) => h._id !== 'mobile-team-agent-safety'
   );
 
+  // PreToolUse — fires BEFORE every edit, enforces risk assessment upfront
+  settings.hooks.PreToolUse.push({
+    _id: 'mobile-team-agent-pre-safety',
+    matcher: 'Edit|Write|MultiEdit',
+    hooks: [
+      {
+        type: 'prompt',
+        prompt:
+          'You are about to edit or create a file. You MUST perform a Risk Assessment BEFORE proceeding.\n\n' +
+          'State the following inline RIGHT NOW before making any changes:\n\n' +
+          '🔍 Risk Assessment: 🟢 LOW / 🟡 MEDIUM / 🔴 HIGH\n' +
+          'Reason: <why this risk level — what specifically is being changed>\n' +
+          'Affected: <file(s) and which tools/features they impact>\n' +
+          'Dependencies: <other files/services that may be affected>\n' +
+          'Breaking: <yes/no — are any existing tool names, required params, or APIs being changed>\n\n' +
+          'Risk level guide:\n' +
+          '🟢 LOW    — Docs, comments, README, non-functional text\n' +
+          '🟡 MEDIUM — Logic change in one tool/skill, new optional param, new file with no existing impact\n' +
+          '🔴 HIGH   — MCP tool signature change, shared service (jira-client/config-manager/memory-manager), index.js, SkillRegistry.js, package.json deps, install/setup scripts\n\n' +
+          'Do NOT proceed with the edit until the risk assessment is shown.',
+      },
+    ],
+  });
+
+  // PostToolUse — fires AFTER every edit, enforces impact summary + commit gate
   settings.hooks.PostToolUse.push({
     _id: 'mobile-team-agent-safety',
     matcher: 'Edit|Write|MultiEdit',
@@ -171,18 +200,32 @@ try {
       {
         type: 'prompt',
         prompt:
-          'A file was just edited or created. You MUST now follow the Change Safety Protocol from CLAUDE.md:\n\n' +
-          '1. If you have NOT already shown a Risk Assessment before this edit — show it now ' +
-          '(🟢 LOW / 🟡 MEDIUM / 🔴 HIGH with reason, affected files, dependencies, and breaking change analysis).\n\n' +
-          '2. Provide the full inline Impact Summary including:\n' +
-          '   - What changed and why\n' +
-          '   - What stays the same\n' +
-          '   - Side effects on other tools or files\n' +
-          '   - Automated test steps (npm run validate, npm test, specific commands)\n' +
-          '   - Manual test steps (exact Claude CLI phrases to type and what to verify)\n' +
-          '   - Test Cases table (at least 3 rows: happy path, edge case, failure case)\n\n' +
-          '3. Ask the developer: "Would you like me to save this test summary to README / TESTING.md, or keep it here? And shall I commit these changes?"\n\n' +
-          'Do NOT commit anything until the developer explicitly confirms.',
+          'A file was just edited or created. You MUST now provide the full Impact Summary:\n\n' +
+          '## 📋 Change Summary\n' +
+          '**What changed:** <one-line description>\n' +
+          '**Files modified:** <list>\n' +
+          '**Risk level:** 🟢/🟡/🔴\n\n' +
+          '### Impact\n' +
+          '- What behaviour changed and why\n' +
+          '- What stays the same\n' +
+          '- Side effects on other tools or files\n\n' +
+          '### How to Test\n' +
+          '#### Automated\n' +
+          '- [ ] npm run validate\n' +
+          '- [ ] npm test\n' +
+          '- [ ] <specific command for changed area>\n\n' +
+          '#### Manual (in Claude CLI)\n' +
+          '- [ ] <exact phrase to trigger the changed tool>\n' +
+          '- [ ] <what to verify in the response>\n' +
+          '- [ ] <edge case to check>\n\n' +
+          '### Test Cases\n' +
+          '| # | Input | Expected Output | Pass? |\n' +
+          '|---|-------|----------------|-------|\n' +
+          '| 1 | <happy path> | <expected> | ☐ |\n' +
+          '| 2 | <edge case> | <expected> | ☐ |\n' +
+          '| 3 | <failure case> | <error/fallback> | ☐ |\n\n' +
+          'Then ask: "Would you like me to save this summary to README / TESTING.md, or keep it here? And shall I commit these changes?"\n\n' +
+          'NEVER commit without explicit developer confirmation.',
       },
     ],
   });

@@ -117,6 +117,188 @@ const RN_ISSUE_PATTERNS = [
     fileFilter: /\.(tsx|ts)$/,
   },
 
+  // ── Redundant / leftover logs ─────────────────────────────────────────────
+  {
+    severity: 'HIGH',
+    pattern: /console\.(debug|info|verbose|trace)\s*\(/g,
+    issue: 'console.debug/info/verbose/trace left in code',
+    fix: 'Remove all console statements before merging — use a proper logger or remove entirely',
+    fileFilter: /\.(tsx|ts|jsx|js)$/,
+  },
+  {
+    severity: 'MEDIUM',
+    pattern: /logger\.(debug|verbose|trace)\s*\(/g,
+    issue: 'Verbose/debug logger calls left in code',
+    fix: 'Remove debug-level logger calls before merging to main',
+    fileFilter: /\.(tsx|ts|jsx|js)$/,
+  },
+
+  // ── Missing handling ──────────────────────────────────────────────────────
+  {
+    severity: 'CRITICAL',
+    pattern: /\.then\s*\([^)]*\)\s*(?!\.catch)/g,
+    issue: 'Promise .then() without .catch() — unhandled rejection risk',
+    fix: 'Chain .catch(e => ...) or use try/await with try-catch',
+    fileFilter: /\.(tsx|ts|jsx|js)$/,
+  },
+  {
+    severity: 'HIGH',
+    pattern: /JSON\.parse\s*\([^)]+\)(?!\s*\/\/|\s*catch|\s*try)/g,
+    issue: 'JSON.parse without try-catch — throws on malformed input',
+    fix: 'Wrap JSON.parse in try-catch: try { JSON.parse(x) } catch { ... }',
+    fileFilter: /\.(tsx|ts|jsx|js)$/,
+  },
+  {
+    severity: 'HIGH',
+    pattern: /(?<!\bif\b.{0,30})\bisLoading\b(?!.*:)/g,
+    issue: 'isLoading state referenced but may not be shown to user — missing loading UI',
+    fix: 'Ensure isLoading renders an ActivityIndicator or skeleton before the main content',
+    fileFilter: /\.(tsx|jsx)$/,
+  },
+  {
+    severity: 'HIGH',
+    pattern: /(?<!\bif\b.{0,30})\bisError\b(?!.*:)/g,
+    issue: 'isError state referenced but may not render an error message to user',
+    fix: 'Show a user-friendly error message or retry option when isError is true',
+    fileFilter: /\.(tsx|jsx)$/,
+  },
+  {
+    severity: 'MEDIUM',
+    pattern: /<(ScrollView|FlatList|SectionList)[^>]*>(?![\s\S]*?(ListEmptyComponent|empty|noData|EmptyState))/g,
+    issue: 'List/ScrollView without empty state handling',
+    fix: 'Add ListEmptyComponent to FlatList/SectionList to handle the zero-item case',
+    fileFilter: /\.(tsx|jsx)$/,
+  },
+  {
+    severity: 'MEDIUM',
+    pattern: /onPress\s*=\s*\{(?![^}]*disabled|[^}]*loading)[^}]*async/g,
+    issue: 'Async onPress handler without disabled state — double-tap risk',
+    fix: 'Disable the button while the async operation is in progress to prevent duplicate calls',
+    fileFilter: /\.(tsx|jsx)$/,
+  },
+
+  // ── File and code placement ───────────────────────────────────────────────
+  {
+    severity: 'HIGH',
+    pattern: /(?:fetch|axios)\s*\.\s*(?:get|post|put|delete|patch)\s*\(/g,
+    issue: 'Direct API call — likely in wrong layer (screen or component)',
+    fix: 'Move API calls to a service file (services/) or a custom hook (hooks/use*.ts)',
+    fileFilter: /[Ss]creen\.(tsx|ts|jsx|js)$/,
+  },
+  {
+    severity: 'MEDIUM',
+    pattern: /export\s+default\s+function\s+[A-Z][a-zA-Z]+/g,
+    issue: 'Component defined in a non-component file (possible misplacement)',
+    fix: 'Move React components to src/components/ or src/screens/ — keep service/util files free of JSX',
+    fileFilter: /(?:service|util|helper|store|slice)\.(tsx|ts|jsx|js)$/,
+  },
+  {
+    severity: 'MEDIUM',
+    pattern: /useSelector|useDispatch|useStore/g,
+    issue: 'Redux/Zustand store access directly in a component — bypasses abstraction',
+    fix: 'Wrap store access in a custom hook (e.g. useAuthStore()) to keep components clean',
+    fileFilter: /[Ss]creen\.(tsx|jsx)$/,
+  },
+
+  // ── Reusability issues ────────────────────────────────────────────────────
+  {
+    severity: 'MEDIUM',
+    pattern: /(\bconst\b[^=]+=\s*\d{3,}(?!\s*ms|\s*px|\s*s))/g,
+    issue: 'Magic number in code — intent is unclear',
+    fix: 'Extract to a named constant: const MAX_RETRY_COUNT = 3 in constants/',
+    fileFilter: /\.(tsx|ts|jsx|js)$/,
+  },
+  {
+    severity: 'MEDIUM',
+    pattern: /(['"`])((?:[A-Za-z0-9_\-\/]+\s*){4,})\1(?=.*\1\2\1)/g,
+    issue: 'Duplicated string literal — reusability issue',
+    fix: 'Extract repeated strings to a constants file or i18n key',
+    fileFilter: /\.(tsx|ts|jsx|js)$/,
+  },
+  {
+    severity: 'LOW',
+    pattern: /(<View[\s\S]{0,200}<\/View>)([\s\S]{0,500})\1/g,
+    issue: 'Potentially duplicated JSX block — reusability opportunity',
+    fix: 'Extract repeated JSX into a reusable component',
+    fileFilter: /\.(tsx|jsx)$/,
+  },
+
+  // ── Library usage ─────────────────────────────────────────────────────────
+  {
+    severity: 'HIGH',
+    pattern: /\bfetch\s*\(\s*['"`]https?:/g,
+    issue: 'Raw fetch() used instead of configured axios/API client',
+    fix: 'Use the project\'s configured API client (axios instance) for consistent baseURL, headers, and interceptors',
+    fileFilter: /\.(tsx|ts|jsx|js)$/,
+  },
+  {
+    severity: 'HIGH',
+    pattern: /import\s+.*\s+from\s+['"`]lodash['"`]/g,
+    issue: 'Full lodash import — massive bundle size increase',
+    fix: "Import only what you need: import debounce from 'lodash/debounce'",
+    fileFilter: /\.(tsx|ts|jsx|js)$/,
+  },
+  {
+    severity: 'MEDIUM',
+    pattern: /import\s+.*\s+from\s+['"`]moment['"`]/g,
+    issue: 'moment.js imported — deprecated and very heavy (300kb+)',
+    fix: "Replace with date-fns or dayjs: import { format } from 'date-fns'",
+    fileFilter: /\.(tsx|ts|jsx|js)$/,
+  },
+  {
+    severity: 'MEDIUM',
+    pattern: /new\s+Date\s*\(\s*\)\.toLocaleString|new\s+Date\s*\(\s*\)\.toLocaleDateString/g,
+    issue: 'Native Date formatting used — inconsistent across platforms/locales',
+    fix: "Use date-fns format() or dayjs().format() for consistent date formatting",
+    fileFilter: /\.(tsx|ts|jsx|js)$/,
+  },
+  {
+    severity: 'MEDIUM',
+    pattern: /import\s+.*\s+from\s+['"`]react-native-vector-icons\/(?!MaterialIcons|Ionicons|FontAwesome5)/g,
+    issue: 'Non-standard icon set imported — verify it is installed and linked',
+    fix: 'Confirm the icon pack is in package.json and linked in the native project',
+    fileFilter: /\.(tsx|ts|jsx|js)$/,
+  },
+
+  // ── Typos (common misspellings in identifiers and strings) ────────────────
+  {
+    severity: 'LOW',
+    pattern: /\b(recieve|occurence|seperate|definately|publically|successfull|paramters|enviroment|authentification|authenication|autherization|managment|responce|requets|resposne|cliend|lenght|hieght|widht|naviagtion|componenet|screeen|visiblity|diabled|pressabel)\b/gi,
+    issue: 'Common spelling mistake in identifier or string',
+    fix: 'Fix the typo: recieve→receive, seperate→separate, definately→definitely, etc.',
+    fileFilter: /\.(tsx|ts|jsx|js|md)$/,
+  },
+
+  // ── Logic issues ──────────────────────────────────────────────────────────
+  {
+    severity: 'HIGH',
+    pattern: /if\s*\(\s*(true|false)\s*\)/g,
+    issue: 'Hardcoded boolean in if-condition — unreachable or always-executed branch',
+    fix: 'Remove the dead branch or use the actual condition variable',
+    fileFilter: /\.(tsx|ts|jsx|js)$/,
+  },
+  {
+    severity: 'HIGH',
+    pattern: /return[\s\S]{0,5};\s*\n\s*(?!\/\/)[^\s}]/g,
+    issue: 'Unreachable code after return statement',
+    fix: 'Remove the dead code after the return, or move it before the return',
+    fileFilter: /\.(tsx|ts|jsx|js)$/,
+  },
+  {
+    severity: 'MEDIUM',
+    pattern: /===\s*undefined\s*===|===\s*null\s*===|null\s*===\s*null|undefined\s*===\s*undefined/g,
+    issue: 'Tautological or redundant null/undefined check',
+    fix: 'Simplify the condition — the comparison is always true or always false',
+    fileFilter: /\.(tsx|ts|jsx|js)$/,
+  },
+  {
+    severity: 'MEDIUM',
+    pattern: /\bsetState\b.*\bsetState\b/g,
+    issue: 'Multiple setState calls in the same handler — causes multiple re-renders',
+    fix: 'Batch updates with a single setState call or use useReducer for complex state',
+    fileFilter: /\.(tsx|ts|jsx|js)$/,
+  },
+
   // LOW
   {
     severity: 'LOW',
