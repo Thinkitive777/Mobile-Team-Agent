@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "A file was just edited or created. You MUST now follow the Change Safety Protocol from CLAUDE.md:\n\n1. If you have NOT already shown a Risk Assessment before this edit — show it now (🟢 LOW / 🟡 MEDIUM / 🔴 HIGH with reason, affected files, dependencies, and breaking change analysis).\n\n2. Provide the full inline Impact Summary including:\n   - What changed and why\n   - What stays the same\n   - Side effects on other tools or files\n   - Automated test steps (npm run validate, npm test, specific commands)\n   - Manual test steps (exact Claude CLI phrases to type and what to verify)\n   - Test Cases table (at least 3 rows: happy path, edge case, failure case)\n\n3. Ask the developer: 'Would you like me to save this test summary to README / TESTING.md, or keep it here? And shall I commit these changes?'\n\nDo NOT commit anything until the developer explicitly confirms."
+          }
+        ]
+      }
+    ]
+  }
+}

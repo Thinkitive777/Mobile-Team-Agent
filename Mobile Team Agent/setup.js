@@ -141,6 +141,59 @@ if (fs.existsSync(claudeMdSource)) {
   }
 }
 
+// Install Change Safety Protocol hook into ~/.claude/settings.json
+info('Installing Change Safety Protocol hook to ~/.claude/settings.json...');
+const globalSettingsPath = path.join(globalClaudeDir, 'settings.json');
+try {
+  fs.mkdirSync(globalClaudeDir, { recursive: true });
+
+  let settings = {};
+  if (fs.existsSync(globalSettingsPath)) {
+    try {
+      settings = JSON.parse(fs.readFileSync(globalSettingsPath, 'utf8'));
+    } catch (_) {
+      warn('Could not parse existing settings.json — will merge carefully');
+    }
+  }
+
+  if (!settings.hooks) settings.hooks = {};
+  if (!settings.hooks.PostToolUse) settings.hooks.PostToolUse = [];
+
+  // Remove any existing mobile-team-agent hook entry to avoid duplicates
+  settings.hooks.PostToolUse = settings.hooks.PostToolUse.filter(
+    (h) => h._id !== 'mobile-team-agent-safety'
+  );
+
+  settings.hooks.PostToolUse.push({
+    _id: 'mobile-team-agent-safety',
+    matcher: 'Edit|Write|MultiEdit',
+    hooks: [
+      {
+        type: 'prompt',
+        prompt:
+          'A file was just edited or created. You MUST now follow the Change Safety Protocol from CLAUDE.md:\n\n' +
+          '1. If you have NOT already shown a Risk Assessment before this edit — show it now ' +
+          '(🟢 LOW / 🟡 MEDIUM / 🔴 HIGH with reason, affected files, dependencies, and breaking change analysis).\n\n' +
+          '2. Provide the full inline Impact Summary including:\n' +
+          '   - What changed and why\n' +
+          '   - What stays the same\n' +
+          '   - Side effects on other tools or files\n' +
+          '   - Automated test steps (npm run validate, npm test, specific commands)\n' +
+          '   - Manual test steps (exact Claude CLI phrases to type and what to verify)\n' +
+          '   - Test Cases table (at least 3 rows: happy path, edge case, failure case)\n\n' +
+          '3. Ask the developer: "Would you like me to save this test summary to README / TESTING.md, or keep it here? And shall I commit these changes?"\n\n' +
+          'Do NOT commit anything until the developer explicitly confirms.',
+      },
+    ],
+  });
+
+  fs.writeFileSync(globalSettingsPath, JSON.stringify(settings, null, 2));
+  success(`Change Safety Protocol hook installed at ${globalSettingsPath}`);
+} catch (err) {
+  warn(`Could not install settings.json hook: ${err.message}`);
+  warn('You can add it manually — see CLAUDE.md Change Safety Protocol section.');
+}
+
 console.log('');
 console.log(`${GREEN}============================================${NC}`);
 console.log(`${GREEN}  Setup Complete!${NC}`);

@@ -136,3 +136,73 @@ prebuilt binaries or distribution archives are committed.
 - Prebuilt binaries in `dist/` are an *optional* developer-side convenience. If you need them locally, run `npm run build:all` from inside `Mobile Team Agent/`. Never `git add` them.
 - When you change source files inside `Mobile Team Agent/`, just commit the source changes — no zip rebuild step.
 - Keep this file in sync with the root `CLAUDE.md` when agent rules change.
+
+## Change Safety Protocol (MANDATORY — applies to ALL file changes)
+
+This rule applies to **every change** Claude makes, to **any file** in this repo — source code, config, markdown, JSON, scripts, everything.
+
+### Step 1 — Risk Assessment (BEFORE making changes)
+
+Before touching any file, Claude MUST evaluate and state the risk inline:
+
+| Risk Level | Criteria |
+|------------|----------|
+| 🟢 LOW | Docs, comments, non-functional text, README updates |
+| 🟡 MEDIUM | Logic changes to a single tool/skill, adding optional params, new files that don't affect existing tools |
+| 🔴 HIGH | Changes to MCP tool signatures (name, required params), shared services (jira-client, config-manager, memory-manager), index.js / SkillRegistry.js, package.json dependencies, install/setup scripts |
+
+Format:
+```
+🔍 Risk Assessment: 🟡 MEDIUM
+Reason: Modifying WorkflowSkill.js end_of_day_report logic — only affects report output format, no tool signature changes.
+Affected: WorkflowSkill.js → end_of_day_report tool
+Dependencies: report-manager.js (read only)
+Breaking: No existing tool params removed or renamed
+```
+
+### Step 2 — Make the Changes
+
+Proceed with edits only after the risk assessment is stated.
+
+### Step 3 — Impact Summary (AFTER making changes, ALWAYS inline)
+
+After every change, Claude MUST provide this summary inline in the chat:
+
+```
+## 📋 Change Summary
+
+**What changed:** <one-line description>
+**Files modified:** <list>
+**Risk level:** 🟢/🟡/🔴
+
+### Impact
+- <bullet: what behaviour changed and why>
+- <bullet: what stays the same>
+- <bullet: any side effects on other tools or files>
+
+### How to Test
+#### Automated
+- [ ] `npm run validate` — syntax-check all source files
+- [ ] `npm test` — run Jest suite (if tests exist for changed area)
+- [ ] <specific test command for changed tool>
+
+#### Manual (in Claude CLI)
+- [ ] <exact phrase to type to trigger the changed tool>
+- [ ] <what to verify in the response>
+- [ ] <edge case to check>
+
+### Test Cases
+| # | Input | Expected Output | Pass? |
+|---|-------|----------------|-------|
+| 1 | <trigger phrase> | <expected result> | ☐ |
+| 2 | <edge case> | <expected result> | ☐ |
+| 3 | <failure case> | <expected error/fallback> | ☐ |
+```
+
+### Step 4 — Ask before committing (ALWAYS)
+
+After showing the summary, Claude MUST ask:
+> "Would you like me to save this test summary to the README / TESTING.md, or keep it here? And shall I commit these changes?"
+
+**NEVER run `git commit` without explicit confirmation from the developer.**
+**NEVER skip the risk assessment or impact summary, even for small changes.**
