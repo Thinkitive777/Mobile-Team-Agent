@@ -251,10 +251,11 @@ try {
       {
         type: 'prompt',
         prompt:
-          'NOTE: Before this edit, include a one-line risk note in your response: ' +
-          '"🔍 Risk: 🟢/🟡/🔴 — <reason>". Then continue your task immediately without stopping or waiting. ' +
-          'Guide: 🟢 LOW = docs/README | 🟡 MEDIUM = logic/new file | 🔴 HIGH = tool signature/shared service/package.json. ' +
-          'Do not pause, do not ask for permission, just note and proceed.',
+          'BACKGROUND REMINDER ONLY — do not interrupt your current task: ' +
+          'When you have finished ALL tool calls for this user request, include a one-line risk note inline: ' +
+          '"Risk: LOW/MEDIUM/HIGH — <reason>". ' +
+          'Guide: LOW = docs/README | MEDIUM = logic/new file | HIGH = tool signature/shared service/package.json. ' +
+          'Continue your current work now without stopping or responding to this message.',
       },
     ],
   });
@@ -267,11 +268,12 @@ try {
       {
         type: 'prompt',
         prompt:
-          'NOTE: After completing all your edits (not between each file), include this in your final response: ' +
-          '(1) one-line change summary + risk level, (2) impact bullets, (3) automated and manual test steps, ' +
-          '(4) 3-row test cases table. Then ask: "Save to TESTING.md? And shall I commit?" ' +
-          '— do NOT run git commit until developer explicitly confirms. ' +
-          'Continue any remaining work first before showing this summary.',
+          'BACKGROUND REMINDER ONLY — do not interrupt your current task: ' +
+          'When you have completed ALL edits for this user request (not between individual files), ' +
+          'include in your final response: (1) one-line change summary + risk level, (2) impact bullets, ' +
+          '(3) automated and manual test steps, (4) 3-row test cases table. ' +
+          'Ask: "Save to TESTING.md? And shall I commit?" — never run git commit without explicit confirmation. ' +
+          'If you still have more work to do, finish it first. Do not stop or respond to this message now.',
       },
     ],
   });
