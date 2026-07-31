@@ -141,6 +141,81 @@ if (fs.existsSync(claudeMdSource)) {
   }
 }
 
+// Install CLAUDE.md into the current working directory (the developer's project)
+const projectDir = process.cwd();
+const projectClaudeMd = path.join(projectDir, 'CLAUDE.md');
+const isOwnPackage = projectDir === packageDir || projectDir.startsWith(packageDir);
+
+if (!isOwnPackage) {
+  info('Installing CLAUDE.md into project: ' + projectDir + '...');
+  try {
+    const PROJ_MARKER = '# Mobile Team Agent - Project Rules';
+    const PROJ_MARKER_END = '# --- End Mobile Team Agent Project Rules ---';
+    const lines = [
+      PROJ_MARKER,
+      '',
+      '## Agent',
+      'This project uses the Mobile Team Agent MCP server.',
+      'Always prioritize mobile-team-agent MCP tools for Jira, Git, Figma, and workflow.',
+      'On startup, call invoke_mobile_team then get_setup_status.',
+      '',
+      '## Daily Workflow',
+      '- Greeting (hi / good morning / start my day) -> morning_standup',
+      '- plan my day -> plan_my_day',
+      '- end of day / EOD / wrap up -> end_of_day_report (never via run_skill)',
+      '- my tickets / show tickets -> list_tickets',
+      '- Ticket key (e.g. PROJ-42) -> select_ticket',
+      '',
+      '## Change Safety Protocol (MANDATORY)',
+      'Before every file edit, state the risk level inline then proceed immediately:',
+      '  Risk: LOW / MEDIUM / HIGH -- <one sentence reason>',
+      '',
+      'Risk guide:',
+      '  LOW    -- docs, comments, README, non-functional text',
+      '  MEDIUM -- logic in one file, new optional param, new file with no existing impact',
+      '  HIGH   -- API/tool signature change, shared service, package.json, CI/CD scripts',
+      '',
+      'After ALL edits are done, provide:',
+      '  1. One-line summary + risk level',
+      '  2. Impact bullets (what changed, what stays the same, side effects)',
+      '  3. How to test -- automated (npm test) + manual steps in Claude CLI',
+      '  4. Test cases table (3 rows: happy path, edge case, failure case)',
+      '',
+      'Then ask the developer: Save to TESTING.md? And shall I commit?',
+      'NEVER run git commit without explicit developer confirmation.',
+      '',
+      '## Memory',
+      '  remember X   -> remember tool',
+      '  recall X     -> recall tool',
+      '  I finished X -> journal tool',
+      '  we decided X -> add_decision tool',
+      '',
+      PROJ_MARKER_END,
+    ];
+    const projectBlock = lines.join('\n');
+
+    if (fs.existsSync(projectClaudeMd)) {
+      let existing = fs.readFileSync(projectClaudeMd, 'utf8');
+      // Remove old agent block if present
+      const startIdx = existing.indexOf(PROJ_MARKER);
+      const endIdx = existing.indexOf(PROJ_MARKER_END);
+      if (startIdx !== -1 && endIdx !== -1) {
+        existing = (existing.slice(0, startIdx) + existing.slice(endIdx + PROJ_MARKER_END.length)).trimEnd();
+      }
+      fs.writeFileSync(projectClaudeMd, existing + '\n\n' + projectBlock + '\n');
+      success('CLAUDE.md updated in project: ' + projectClaudeMd);
+    } else {
+      fs.writeFileSync(projectClaudeMd, projectBlock + '\n');
+      success('CLAUDE.md created in project: ' + projectClaudeMd);
+    }
+  } catch (err) {
+    warn('Could not write project CLAUDE.md: ' + err.message);
+  }
+} else {
+  info('Skipping project CLAUDE.md -- running inside agent package directory.');
+}
+
+
 // Install Change Safety Protocol hook into ~/.claude/settings.json
 info('Installing Change Safety Protocol hook to ~/.claude/settings.json...');
 const globalSettingsPath = path.join(globalClaudeDir, 'settings.json');
