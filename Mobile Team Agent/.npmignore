@@ -1,0 +1,8 @@
+dist/
+*.zip
+.env
+.DS_Store
+node_modules/
+TESTING.md
+agent_architecture_analysis.md
+Scripts/

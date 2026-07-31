@@ -1,6 +1,6 @@
 {
   "name": "mobile-team-agent",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "description": "Context-aware, memory-driven developer assistant with Jira + Git integration, smart ticket guidance, persistent preferences, and intelligent workflow automation",
   "main": "Main/index.js",
   "bin": "Main/index.js",
@@ -20,7 +20,15 @@
       "node18-linux-arm64"
     ]
   },
-  "keywords": ["jira", "git", "developer-assistant", "automation", "mcp", "standup", "reporting"],
+  "keywords": [
+    "jira",
+    "git",
+    "developer-assistant",
+    "automation",
+    "mcp",
+    "standup",
+    "reporting"
+  ],
   "author": "Mobile Team",
   "license": "ISC",
   "type": "commonjs",

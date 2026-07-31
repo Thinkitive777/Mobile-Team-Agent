@@ -16,27 +16,19 @@ The **Mobile Team Agent** is an advanced AI assistant designed for App Developer
 
 ## 📦 Installation
 
-The agent is distributed as a standalone package. No Node.js installation is required for the user.
+The agent is published on npm and can be installed with a single command.
 
-### 1. Download & Unzip
-Extract the `mobile-team-agent.zip` file to a stable location on your machine.
-
-### 2. Run the Installer
-Open your terminal or command prompt in the extracted folder and run:
-
-#### **Mac & Linux**
+### 1. Install
 ```bash
-chmod +x install.sh && ./install.sh
+npm install -g mobile-team-agent
 ```
 
-#### **Windows**
-Run `install.bat` by double-clicking it or executing it in CMD:
-```cmd
-install.bat
+### 2. Run Setup
+```bash
+npx mobile-team-agent setup
 ```
 
-### 3. Automatic Registration
-The installer will automatically register the agent with your **Claude CLI**. You'll see a success message confirming the agent is connected.
+This will automatically register the agent with your **Claude CLI**. You'll see a success message confirming the agent is connected.
 
 ---
 
@@ -83,4 +75,6 @@ The Mobile Team Agent's tools are automatically loaded. You can activate the spe
 
 ## 🤝 Need Help?
 If you encounter any issues during registration, you can manually register the agent using:
-`claude mcp add mobile-team-agent -- "/path/to/extracted/folder/dist/mobile-team-agent-<os>"`
+```bash
+claude mcp add mobile-team-agent -- node $(npm root -g)/mobile-team-agent/Main/index.js
+```
