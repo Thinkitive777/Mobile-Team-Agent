@@ -1,6 +1,6 @@
 # 🚀 Mobile Team Agent
 
-> **v3.4.8** — Context-aware, memory-driven developer assistant with Jira + Git integration, smart ticket guidance, persistent preferences, intelligent workflow automation, Figma design-to-code, React Native project setup, deep code review, unit test generation, and session memory across days.
+> **v3.4.10** — Context-aware, memory-driven developer assistant with Jira + Git integration, smart ticket guidance, persistent preferences, intelligent workflow automation, Figma design-to-code, React Native project setup, deep code review, unit test generation, and session memory across days.
 
 The **Mobile Team Agent** is an MCP (Model Context Protocol) server that plugs into **Claude CLI**. It gives Claude a full suite of tools for mobile developers — Jira ticketing, Git insights, Figma design reading, RN project scaffolding, code review, unit test generation, and persistent memory — all accessible via natural language.
 
@@ -260,7 +260,7 @@ When you say `"invoke mobile-team-agent"` or `"good morning"` next day, this sna
 
 | Tool | What it does | Say |
 |------|-------------|-----|
-| `review_branch` | Deep code review of current branch vs main. Detects RN issues, scores merge risk (LOW/MEDIUM/HIGH), lists must-fix and should-fix items | `"review my code"` / `"review my branch before PR"` |
+| `review_branch` | Deep code review of current branch vs main. Detects RN issues, scores merge risk (LOW/MEDIUM/HIGH), lists must-fix and should-fix items, and **automatically checks which changed files are missing unit tests** | `"review my code"` / `"review my branch before PR"` |
 | `compare_with_branch` | Merge readiness report: changed files, native changes (rebuild?), dependency changes, config changes, files by risk level, commit list | `"compare with main"` / `"what did I change?"` |
 | `check_breaking_changes` | What could break on merge: major package bumps, deleted files, type changes, nav route changes, native code, service/store changes | `"will this break anything?"` / `"is it safe to merge?"` |
 | `detect_rn_issues` | Scan a file or full branch diff for RN anti-patterns | `"scan for RN issues in LoginScreen.tsx"` / `"detect issues in my branch"` |
@@ -288,7 +288,11 @@ When you say `"invoke mobile-team-agent"` or `"good morning"` next day, this sna
 | LOW | Logic | Hardcoded booleans, unreachable code after return |
 | LOW | Debt | TODO/FIXME comments |
 
-After `review_branch`, the agent asks: **"Would you like me to generate unit tests for your changed files?"**
+**`review_branch` automatically includes a Unit Test Coverage check:**
+- Scans every changed `.ts/.tsx/.js/.jsx` file for a matching test file
+- Reports how many changed files have tests vs are missing tests
+- Flags **CRITICAL** if none of the changed files have any tests
+- Suggests `generate_unit_tests` inline if coverage gaps are found — no extra command needed
 
 ---
 
