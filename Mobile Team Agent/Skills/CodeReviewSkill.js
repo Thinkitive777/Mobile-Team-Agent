@@ -472,6 +472,57 @@ class CodeReviewSkill extends BaseSkill {
           out += `\nVerdict: High risk — do NOT merge until CRITICAL and HIGH issues are resolved.\n`;
         }
 
+        // Unit test coverage check — scan for missing test files on changed source files
+        const sourceFiles = changedFiles.filter(f => {
+          const ext = path.extname(f.path);
+          return ['.ts', '.tsx', '.js', '.jsx'].includes(ext) &&
+            !/\.test\.|\.spec\.|__tests__/.test(f.path) &&
+            !/node_modules/.test(f.path);
+        });
+
+        if (sourceFiles.length > 0) {
+          const missingTests = [];
+          const hasTests = [];
+
+          for (const f of sourceFiles) {
+            const base = path.basename(f.path, path.extname(f.path));
+            const dir = path.dirname(f.path);
+            const candidates = [
+              path.join(repoPath, dir, `${base}.test${path.extname(f.path)}`),
+              path.join(repoPath, dir, `${base}.spec${path.extname(f.path)}`),
+              path.join(repoPath, dir, '__tests__', `${base}.test${path.extname(f.path)}`),
+              path.join(repoPath, dir, '__tests__', `${base}.spec${path.extname(f.path)}`),
+              path.join(repoPath, '__tests__', `${base}.test${path.extname(f.path)}`),
+            ];
+            const found = candidates.some(c => fs.existsSync(c));
+            if (found) hasTests.push(f.path);
+            else missingTests.push(f.path);
+          }
+
+          out += `\n${'='.repeat(60)}\n`;
+          out += `UNIT TEST COVERAGE\n`;
+          out += `${'─'.repeat(40)}\n`;
+          out += `Source files changed: ${sourceFiles.length}\n`;
+          out += `Files with tests:     ${hasTests.length}\n`;
+          out += `Files missing tests:  ${missingTests.length}\n\n`;
+
+          if (missingTests.length === 0) {
+            out += `All changed files have test coverage.\n`;
+          } else {
+            out += `NO TEST FILE FOUND FOR:\n`;
+            for (const f of missingTests) {
+              out += `  ${f}\n`;
+            }
+            if (missingTests.length >= sourceFiles.length) {
+              out += `\nCRITICAL: None of the changed files have unit tests.\n`;
+            } else {
+              out += `\nWARNING: ${missingTests.length} of ${sourceFiles.length} changed files have no tests.\n`;
+            }
+            out += `Run 'generate_unit_tests' to auto-generate and run tests for these files.\n`;
+            out += `Or ask: "generate unit tests for this branch"\n`;
+          }
+        }
+
         return this.textResponse(out);
       }
 
