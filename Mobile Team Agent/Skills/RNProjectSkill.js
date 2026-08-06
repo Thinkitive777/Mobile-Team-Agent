@@ -183,8 +183,36 @@ Sentry.init({ dsn: SENTRY_DSN, tracesSampleRate: 0.2 });`,
 };
 
 // ── Standard folder structure ──────────────────────────────────────────────
+// Expo: feature-based architecture (reference: AdaptivateDoctorApp)
+const EXPO_FOLDER_STRUCTURE = [
+  'src/shared/api',
+  'src/shared/store',
+  'src/shared/constants',
+  'src/shared/types',
+  'src/shared/utils',
+  'src/shared/components',
+  'src/shared/hooks',
+  'src/navigation',
+  'src/features/auth/screens',
+  'src/features/auth/components',
+  'src/features/auth/hooks',
+  'src/features/auth/services',
+  'src/features/auth/store',
+  'src/features/auth/types',
+  'src/features/auth/validation',
+  'src/features/home/screens',
+  'src/features/home/hooks',
+  'app',
+  'assets',
+  '__tests__/components',
+  '__tests__/hooks',
+  '__tests__/screens',
+  '__tests__/services',
+  '__tests__/utils',
+];
 
-const FOLDER_STRUCTURE = [
+// CLI: flat src/ structure
+const CLI_FOLDER_STRUCTURE = [
   'src/screens',
   'src/components',
   'src/components/common',
@@ -203,6 +231,9 @@ const FOLDER_STRUCTURE = [
   '__tests__/services',
   '__tests__/utils',
 ];
+
+// Default alias — used by analyze_rn_architecture (CLI pattern)
+const FOLDER_STRUCTURE = CLI_FOLDER_STRUCTURE;
 
 // ── Anti-patterns to detect ────────────────────────────────────────────────
 
@@ -365,8 +396,17 @@ class RNProjectSkill extends BaseSkill {
         // Step 2: Folder structure
         out += `STEP 2 — Create Folder Structure\n`;
         out += `${'─'.repeat(40)}\n`;
-        const mkdirCmds = FOLDER_STRUCTURE.map(f => `mkdir -p ${f}`).join(' && ');
+        const folderList = type === 'expo' ? EXPO_FOLDER_STRUCTURE : CLI_FOLDER_STRUCTURE;
+        const mkdirCmds = folderList.map(f => `mkdir -p ${f}`).join(' && ');
         out += `${mkdirCmds}\n\n`;
+
+        if (type === 'expo') {
+          out += `NOTE: This follows the feature-based Expo architecture (AdaptivateDoctorApp pattern):\n`;
+          out += `  src/shared/     — cross-feature: api client, store, constants, types, utils\n`;
+          out += `  src/features/   — one folder per domain (auth, home, appointments, etc.)\n`;
+          out += `  src/navigation/ — RootNavigator, AuthNavigator, AppNavigator, types.ts\n`;
+          out += `  app/App.tsx     — entry point with providers in order: Redux > QueryClient > Navigation\n\n`;
+        }
 
         // Step 3: Libraries
         const librariesToInstall = [];
@@ -403,13 +443,30 @@ class RNProjectSkill extends BaseSkill {
         // Step 5: Architecture rules
         out += `\nARCHITECTURE RULES (enforce in code review)\n`;
         out += `${'─'.repeat(40)}\n`;
-        out += `- screens/     Only JSX + local state + hook calls. No API calls, no business logic.\n`;
-        out += `- components/  Reusable, dumb UI. Props in, renders out. No store access.\n`;
-        out += `- hooks/       All stateful logic. useXxx naming. One concern per hook.\n`;
-        out += `- services/    All external I/O (API, storage, analytics). Pure async functions.\n`;
-        out += `- store/       Global state only. No UI logic. Actions must be testable.\n`;
-        out += `- types/       Shared TypeScript interfaces and enums only.\n`;
-        out += `- constants/   App-wide strings, numbers, colors, routes. Never hardcode inline.\n`;
+        if (type === 'expo') {
+          out += `Expo Feature-Based Architecture (AdaptivateDoctorApp reference pattern):\n`;
+          out += `- features/[name]/screens/    — JSX + hook calls only. No API, no business logic.\n`;
+          out += `- features/[name]/hooks/      — Business logic + state wiring. One concern per hook.\n`;
+          out += `- features/[name]/services/   — API calls only. Import apiClient, never axios directly.\n`;
+          out += `- features/[name]/store/      — Redux slice ONLY if feature needs global/persistent state.\n`;
+          out += `- features/[name]/types/      — TypeScript interfaces for this feature only.\n`;
+          out += `- features/[name]/validation/ — Zod schemas (only if feature has forms).\n`;
+          out += `- shared/api/client.ts        — ONE Axios instance with auth interceptor + 401 refresh queue.\n`;
+          out += `- shared/store/               — Redux store + useAppDispatch/useAppSelector only.\n`;
+          out += `- shared/constants/colors.ts  — Colors object. NEVER hardcode hex values in components.\n`;
+          out += `- shared/constants/routes.ts  — Routes object. NEVER hardcode route strings.\n`;
+          out += `- navigation/RootNavigator    — ONLY reads isAuthenticated from Redux. Zero business logic.\n`;
+          out += `\nState split: Redux for auth/global UI | React Query for all server data (lists, detail, mutations)\n`;
+          out += `Provider order in App.tsx: Provider (Redux) > QueryClientProvider > NavigationContainer\n`;
+        } else {
+          out += `- screens/     Only JSX + local state + hook calls. No API calls, no business logic.\n`;
+          out += `- components/  Reusable, dumb UI. Props in, renders out. No store access.\n`;
+          out += `- hooks/       All stateful logic. useXxx naming. One concern per hook.\n`;
+          out += `- services/    All external I/O (API, storage, analytics). Pure async functions.\n`;
+          out += `- store/       Global state only. No UI logic. Actions must be testable.\n`;
+          out += `- types/       Shared TypeScript interfaces and enums only.\n`;
+          out += `- constants/   App-wide strings, numbers, colors, routes. Never hardcode inline.\n`;
+        }
 
         if (setupNotes.length > 0) {
           out += `\nSETUP NOTES\n`;
@@ -453,12 +510,44 @@ class RNProjectSkill extends BaseSkill {
         const hasNetworking = !!(pkg.dependencies?.axios || pkg.dependencies?.['@tanstack/react-query']);
         const hasTesting = !!(pkg.devDependencies?.['@testing-library/react-native'] || pkg.devDependencies?.jest);
 
-        // Check expected folders
-        const expectedFolders = ['src/screens', 'src/components', 'src/hooks', 'src/services', 'src/types'];
+        // Check expected folders — Expo uses feature-based architecture, CLI uses flat src/
+        const expectedFolders = isExpo
+          ? [
+              'src/shared/api',
+              'src/shared/store',
+              'src/shared/constants',
+              'src/features',
+              'src/navigation',
+              '__tests__',
+            ]
+          : ['src/screens', 'src/components', 'src/hooks', 'src/services', 'src/types'];
+
         const foundFolders = expectedFolders.filter(folder =>
           relativeFiles.some(f => f.startsWith(folder))
         );
         const missingFolders = expectedFolders.filter(f => !foundFolders.includes(f));
+
+        // Expo-specific: check feature folder has correct subfolders (screens, hooks, services)
+        const expoFeatureIssues = [];
+        if (isExpo) {
+          const featureDir = relativeFiles.filter(f => f.startsWith('src/features/'));
+          if (featureDir.length > 0) {
+            const features = [...new Set(featureDir.map(f => f.split('/')[2]).filter(Boolean))];
+            for (const feat of features) {
+              const hasScreens = relativeFiles.some(f => f.startsWith(`src/features/${feat}/screens`));
+              const hasHooks = relativeFiles.some(f => f.startsWith(`src/features/${feat}/hooks`));
+              const hasServices = relativeFiles.some(f => f.startsWith(`src/features/${feat}/services`));
+              if (!hasScreens) expoFeatureIssues.push(`[MEDIUM] features/${feat}/ missing screens/ folder`);
+              if (!hasHooks) expoFeatureIssues.push(`[MEDIUM] features/${feat}/ missing hooks/ folder`);
+              if (!hasServices && feat !== 'home' && feat !== 'profile') expoFeatureIssues.push(`[LOW] features/${feat}/ missing services/ folder`);
+            }
+          }
+          // Check for shared/constants files
+          const hasColors = relativeFiles.some(f => f.includes('shared/constants/colors'));
+          const hasRoutes = relativeFiles.some(f => f.includes('shared/constants/routes'));
+          if (!hasColors) expoFeatureIssues.push('[MEDIUM] shared/constants/colors.ts missing — use Colors object, never hardcode hex');
+          if (!hasRoutes) expoFeatureIssues.push('[MEDIUM] shared/constants/routes.ts missing — use Routes object, never hardcode route strings');
+        }
 
         // Run antipattern checks
         const issues = ARCH_ANTIPATTERNS
@@ -495,15 +584,33 @@ class RNProjectSkill extends BaseSkill {
         out += `\n`;
 
         // Issues
-        if (issues.length === 0) {
+        const totalIssueCount = issues.length + expoFeatureIssues.length;
+        if (totalIssueCount === 0) {
           out += `ISSUES: None found. Architecture looks solid.\n\n`;
         } else {
-          out += `ISSUES (${issues.length})\n`;
+          out += `ISSUES (${totalIssueCount})\n`;
           out += `${'─'.repeat(40)}\n`;
           for (const issue of issues) {
             out += `[${issue.severity}] ${issue.issue}\n`;
             out += `       Fix: ${issue.fix}\n\n`;
           }
+          for (const issue of expoFeatureIssues) {
+            out += `${issue}\n`;
+          }
+          if (expoFeatureIssues.length > 0) out += `\n`;
+        }
+
+        // Expo reference note
+        if (isExpo) {
+          out += `REFERENCE ARCHITECTURE\n`;
+          out += `${'─'.repeat(40)}\n`;
+          out += `Based on AdaptivateDoctorApp (Expo SDK 57, RTK + React Query):\n`;
+          out += `  src/shared/api/client.ts   — single Axios instance with 401 refresh queue\n`;
+          out += `  src/shared/store/          — Redux store + useAppDispatch/useAppSelector\n`;
+          out += `  src/shared/constants/      — Colors, Routes, config (never hardcode)\n`;
+          out += `  src/features/[domain]/     — screens/, hooks/, services/, store/, types/, validation/\n`;
+          out += `  src/navigation/            — RootNavigator (auth-gate) + AuthNavigator + AppNavigator\n`;
+          out += `  app/App.tsx                — Provider > QueryClientProvider > NavigationContainer\n\n`;
         }
 
         // Missing library recommendations
