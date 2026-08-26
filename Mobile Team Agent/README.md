@@ -1,6 +1,6 @@
 # 🚀 Mobile Team Agent
 
-> **v3.4.10** — Context-aware, memory-driven developer assistant with Jira + Git integration, smart ticket guidance, persistent preferences, intelligent workflow automation, Figma design-to-code, React Native project setup, deep code review, unit test generation, and session memory across days.
+> **v3.5.0** — Context-aware, memory-driven developer assistant with Jira + Git integration, smart ticket guidance, persistent preferences, intelligent workflow automation, Figma design-to-code, React Native project setup, deep code review, unit test generation, prompt validation, and session memory across days.
 
 The **Mobile Team Agent** is an MCP (Model Context Protocol) server that plugs into **Claude CLI**. It gives Claude a full suite of tools for mobile developers — Jira ticketing, Git insights, Figma design reading, RN project scaffolding, code review, unit test generation, and persistent memory — all accessible via natural language.
 
@@ -97,6 +97,28 @@ Git is auto-detected from the current directory — no setup needed.
 ---
 
 ## 🗂 All Tools by Category
+
+### 🎯 AI Efficiency & Prompt Validation
+
+Runs before every other skill — it decides whether the agent has enough information to implement correctly, and keeps it from reading half the repo to find out.
+
+| Tool | What it does | Say |
+|------|-------------|-----|
+| `analyze_request` | Validate a request before implementing: goal, scope, inputs, expected output, constraints, edge cases. Classifies missing info as CRITICAL / IMPORTANT / OPTIONAL and returns a READY / PARTIALLY READY / NEED CLARIFICATION verdict | `"check my prompt"` / `"is this enough information?"` / `/analyze <request>` |
+| `narrow_code_scope` | Find the smallest relevant set of files for a feature or symbol, ranked, with the matched lines — so only those files get opened | `"where is end_of_day_report implemented"` / `/narrow biometric login` |
+| `prompt_template` | The standard prompt structure (goal, context, scope, requirements, constraints, inputs, expected output, validation) | `"give me a prompt template"` / `/prompt add offline caching` |
+
+**The gate the agent applies to every request:**
+
+1. **Reuse context first** — conversation → project files → ticket → saved memory → config. Never asks for what it already has.
+2. **Never assume** file names, API contracts, business rules, error handling, defaults, auth behaviour, data models, or supported versions.
+3. **Classify the gap** — CRITICAL (stop and ask) / IMPORTANT (ask only if a wrong guess causes rework) / OPTIONAL (never blocks).
+4. **Decide** — READY → implement; PARTIALLY READY → implement and state assumptions; NEED CLARIFICATION → one grouped question set, critical first.
+5. **Narrow before reading** — feature → files → functions; change only what was asked.
+
+Clear requests still run immediately — `"fix this function"` with the function attached is never turned into a questionnaire.
+
+---
 
 ### 🔧 Setup & Connection
 
@@ -429,6 +451,7 @@ Mobile Team Agent/
 │   ├── CodeReviewSkill.js    # review_branch, detect_rn_issues, compare_with_branch, ...
 │   ├── RNProjectSkill.js     # setup_rn_project, analyze_rn_architecture, recommend_libraries
 │   ├── UnitTestSkill.js      # generate_unit_tests, check_test_coverage, run_tests
+│   ├── EfficiencySkill.js    # analyze_request, narrow_code_scope, prompt_template
 │   └── prompts/              # Markdown prompt templates per skill
 ├── Services/
 │   ├── jira-client.js
