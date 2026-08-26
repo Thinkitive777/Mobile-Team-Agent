@@ -35,7 +35,7 @@ Tools: `analyze_request` (readiness check on a vague request — skip it on clea
 
 ## Core Rules
 - Always prioritize the 'mobile-team-agent' MCP tools for Jira and Git related tasks.
-- On startup or when "invoke mobile-team-agent" is mentioned, call `invoke_mobile_team` then `get_setup_status`. If all connected, ask "What's the plan for today?" — do NOT re-ask for setup.
+- On startup or when "invoke mobile-team-agent" is mentioned, call `invoke_mobile_team`, then `get_setup_status`, then `check_branch_sync`. If all connected, ask "What's the plan for today?" — do NOT re-ask for setup.
 - Morning intent — **greeting-based only** ("hi", "hello", "good morning", "what's up", "morning", "start my day", "let's start") → call `morning_standup`. Shows To Do / In Progress / Development Done tickets and suggests what to work on next. Do NOT call for update/EOD requests.
 - Report / update intent ("today's updates", "daily updates", "my updates", "provide updates", "provide report", "list of tasks done", "report of today", "end of day", "EOD", "wrap up", "finish day") → call `end_of_day_report` **directly** (never via `run_skill`). Creates `~/Desktop/Todays Updates/DD-MM-YYYY_updates.md` with project-wise completed tickets, commits, and work summary. If nothing was done today, returns "No updates for today. Would you like to pick up a task?"
 - These two features are **fully independent** — never mix their triggers.
@@ -73,6 +73,9 @@ Tools: `analyze_request` (readiness check on a vague request — skip it on clea
 - RN issue scan intent — "scan for RN issues", "check this file for problems", "detect issues in X.tsx" → call `detect_rn_issues`.
 - Prompt-quality intent — "check my prompt", "is this enough information", "analyze this request" → `analyze_request`. "where is X implemented", "which files handle X" → `narrow_code_scope`. "give me a prompt template", "how should I write prompts" → `prompt_template`.
 
+- Branch sync intent ("am I up to date", "is my branch synced", "do I need to pull") → `check_branch_sync`. Never run `git pull` yourself — tell the developer to run it.
+- Build intent ("build the app", "run the app", "pod install") → do NOT run it. Give the developer the exact command and let them run it.
+
 ## Tool Reference
 
 ### AI Efficiency & Prompt Validation
@@ -105,6 +108,7 @@ Tools: `analyze_request` (readiness check on a vague request — skip it on clea
 - `plan_my_day` — Deep daily planning: new/pending/blocked/overdue tickets, comment context, recent code activity, saved memory, and a prioritised action plan.
 - `end_of_day_report` — Generate and save daily/EOD summary to `~/Desktop/Todays Updates/DD-MM-YYYY_updates.md`. Call directly — NEVER via `run_skill`.
 - `get_recent_commits` — Git activity with Jira linking, file-level diff stats, and work area analysis.
+- `check_branch_sync` — Check whether the local branch is in sync with its remote before work starts. Fetches remote-tracking refs (read-only), reports ahead/behind, and tells the developer when a `git pull` is needed. Never pulls.
 - `get_commit_details` — Full commit deep-dive: patch, files modified, lines +/-, referenced tickets.
 
 ### Memory (persistent across sessions)
@@ -130,6 +134,19 @@ Tools: `analyze_request` (readiness check on a vague request — skip it on clea
 - `compare_with_branch` — Merge readiness report: file diff summary, native changes (rebuild required), dependency changes, config changes, all files by risk level, commit list.
 - `check_breaking_changes` — Finds what could break on merge: major package bumps, deleted files, type changes, navigation route changes, native code, service/store changes.
 - `detect_rn_issues` — Scans a file or the full branch diff for RN anti-patterns: untyped navigation, FlatList without keyExtractor, inline styles, console.log, empty catch blocks, useEffect stale closures, hardcoded colors, and more.
+
+## Build & Branch Sync Rules (MANDATORY)
+
+**1. Never build the project — the developer builds manually.**
+Do not run `npm run build`, `expo prebuild`, `pod install`, `xcodebuild`, `gradlew`, `react-native run-ios` / `run-android`, or start Metro / a dev server. When a change requires a build or a native rebuild, say so and give the exact command for the developer to run — then stop and let them run it.
+Running the test suite is **not** a build: `run_tests`, `generate_unit_tests`, and `check_test_coverage` are still expected after development. Syntax checks (`npm run validate`) are also allowed.
+
+**2. Check remote sync at the very beginning.**
+At the start of a session — right after `invoke_mobile_team` and `get_setup_status`, and before any file is read or changed — call `check_branch_sync`.
+- **In sync** → tell the developer the branch is up to date with the remote, then continue.
+- **Behind or diverged** → tell the developer to run `git pull` before any changes are made, and do not edit files until they have pulled or explicitly told you to proceed.
+- **No upstream** → say so and continue; there is nothing to pull.
+Never run `git pull`, `git fetch --prune`, `git merge`, or `git rebase` yourself. `check_branch_sync` only fetches remote-tracking refs; it never touches the working tree.
 
 ## Connection Awareness
 - Check what's already connected before suggesting setup.
@@ -170,7 +187,7 @@ prebuilt binaries or distribution archives are committed.
 ## Repo Hygiene Rules
 - **Never commit `node_modules/`, `dist/`, `*.zip`, `.env`, or `.DS_Store`.** They are listed in the root `.gitignore`. The repo must stay light enough that `git clone` is fast.
 - **Do not rebuild or commit `mobile-team-agent.zip`.** The historical "rebuild zip on every change" rule is gone — there is no zip anymore. Users get the latest code via `git pull`.
-- Prebuilt binaries in `dist/` are an *optional* developer-side convenience. If you need them locally, run `npm run build:all` from inside `Mobile Team Agent/`. Never `git add` them.
+- Prebuilt binaries in `dist/` are an *optional* developer-side convenience. The **developer** runs `npm run build:all` from inside `Mobile Team Agent/` if they want them — the agent never runs it (see Build & Branch Sync Rules). Never `git add` them.
 - When you change source files inside `Mobile Team Agent/`, just commit the source changes — no zip rebuild step.
 - Keep this file in sync with the root `CLAUDE.md` when agent rules change.
 

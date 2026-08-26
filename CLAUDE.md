@@ -35,7 +35,7 @@ Tools: `analyze_request` (readiness check on a vague request — skip it on clea
 
 ## Core Rules
 - Always prioritize the 'mobile-team-agent' MCP tools for Jira and Git related tasks.
-- On startup or when "invoke mobile-team-agent" is mentioned, call `invoke_mobile_team` then `get_setup_status`. If all connected, ask "What's the plan for today?" — do NOT re-ask for setup.
+- On startup or when "invoke mobile-team-agent" is mentioned, call `invoke_mobile_team`, then `get_setup_status`, then `check_branch_sync`. If all connected, ask "What's the plan for today?" — do NOT re-ask for setup.
 - Morning intent — **greeting-based only** ("hi", "hello", "good morning", "what's up", "morning", "start my day", "let's start") → call `morning_standup`. Shows To Do / In Progress / Development Done tickets and suggests what to work on next. Do NOT call this for update or EOD requests.
 - Report / update intent ("today's updates", "daily updates", "my updates", "provide updates", "provide report", "list of tasks done", "report of today", "end of day", "EOD", "wrap up", "finish day") → call `end_of_day_report` **directly** (never via `run_skill`). Creates `~/Desktop/Todays Updates/DD-MM-YYYY_updates.md` with project-wise completed tickets, commits, and work summary. If nothing was done, returns "No updates for today. Would you like to pick up a task?"
 - These two features are **fully independent** — never mix their triggers.
@@ -66,6 +66,9 @@ Tools: `analyze_request` (readiness check on a vague request — skip it on clea
 - Figma single-screen design intent — "create the X screen", "build the X screen from figma", "implement the X figma screen", "code up the X screen", "read the X screen", "show me the X design" → call `read_figma_screen` with `screen=<name or node id>`. This is the ONLY tool that returns the actual design data (text, colors, fills, layout, auto-layout, padding, child hierarchy, plus a rendered PNG URL). Always call this BEFORE writing code for any Figma screen — never recreate a screen from `list_figma_screens` alone, that path leads to fabricated UI.
 - Figma suggestion intent — "suggest screens to implement", "what should I build next from figma", "screens not implemented", "next 5 screens", "show 5 more" → call `suggest_figma_screens`. Always returns 5 at a time. To paginate, call again with `offset=<previous_offset + 5>` (or `page=2`, `page=3`, ...). Use `refresh=true` if the project has changed.
 - Prompt-quality intent — "check my prompt", "is this enough information", "analyze this request" → `analyze_request`. "where is X implemented", "which files handle X" → `narrow_code_scope`. "give me a prompt template", "how should I write prompts" → `prompt_template`.
+
+- Branch sync intent ("am I up to date", "is my branch synced", "do I need to pull") → `check_branch_sync`. Never run `git pull` yourself — tell the developer to run it.
+- Build intent ("build the app", "run the app", "pod install") → do NOT run it. Give the developer the exact command and let them run it.
 
 ## Tool Reference
 
@@ -110,6 +113,7 @@ Tools: `analyze_request` (readiness check on a vague request — skip it on clea
 - `set_preferences` — Save defaults (project, sprint, assignee, greeting name).
 - `health_check` — Test all integrations.
 - `get_recent_commits` — Git activity with auto Jira linking, file-level diff stats, and work area analysis (`include_diffs` / `include_areas`, both default true).
+- `check_branch_sync` — Check whether the local branch is in sync with its remote before work starts. Fetches remote-tracking refs (read-only), reports ahead/behind, and tells the developer when a `git pull` is needed. Never pulls.
 - `get_commit_details` — Full commit deep-dive: actual code changes (patch), files modified, lines +/-, and referenced Jira tickets.
 
 ### Memory (persistent across sessions)
@@ -130,6 +134,19 @@ Tools: `analyze_request` (readiness check on a vague request — skip it on clea
 - `list_figma_screens` — Read a Figma file (URL or key) and list every top-level frame as a screen. Remembers the last file used. Returns frame names + dimensions ONLY — no visual contents.
 - `read_figma_screen` — Read the FULL design data for a single screen so the agent can faithfully recreate it: text content, colors, fills, strokes, auto-layout, padding, spacing, corner radii, child hierarchy, plus a rendered PNG URL. Accepts the screen by name (substring match), node id (`1491:683`), or a Figma URL with `?node-id=`. Use this whenever the user asks to build/recreate/code-up a screen.
 - `suggest_figma_screens` — Suggest only screens not yet implemented in the current project. Returns 5 at a time. Paginate via `offset` (e.g. `offset=5`, `offset=10`) or `page` (1-indexed). Pass `refresh=true` to re-scan.
+
+## Build & Branch Sync Rules (MANDATORY)
+
+**1. Never build the project — the developer builds manually.**
+Do not run `npm run build`, `expo prebuild`, `pod install`, `xcodebuild`, `gradlew`, `react-native run-ios` / `run-android`, or start Metro / a dev server. When a change requires a build or a native rebuild, say so and give the exact command for the developer to run — then stop and let them run it.
+Running the test suite is **not** a build: `run_tests`, `generate_unit_tests`, and `check_test_coverage` are still expected after development. Syntax checks (`npm run validate`) are also allowed.
+
+**2. Check remote sync at the very beginning.**
+At the start of a session — right after `invoke_mobile_team` and `get_setup_status`, and before any file is read or changed — call `check_branch_sync`.
+- **In sync** → tell the developer the branch is up to date with the remote, then continue.
+- **Behind or diverged** → tell the developer to run `git pull` before any changes are made, and do not edit files until they have pulled or explicitly told you to proceed.
+- **No upstream** → say so and continue; there is nothing to pull.
+Never run `git pull`, `git fetch --prune`, `git merge`, or `git rebase` yourself. `check_branch_sync` only fetches remote-tracking refs; it never touches the working tree.
 
 ## Connection Awareness
 - Check what's already connected before suggesting setup.
@@ -195,7 +212,7 @@ prebuilt binaries or distribution archives are committed.
 ## Repo Hygiene Rules
 - **Never commit `node_modules/`, `dist/`, `*.zip`, `.env`, or `.DS_Store`.** They are listed in the root `.gitignore`. The repo must stay light enough that `git clone` is fast.
 - **Do not rebuild or commit `mobile-team-agent.zip`.** The historical "rebuild zip on every change" rule is gone — there is no zip anymore. Users get the latest code via `git pull`.
-- Prebuilt binaries in `dist/` are an *optional* developer-side convenience. If you need them locally, run `npm run build:all` from inside `Mobile Team Agent/`. Never `git add` them.
+- Prebuilt binaries in `dist/` are an *optional* developer-side convenience. The **developer** runs `npm run build:all` from inside `Mobile Team Agent/` if they want them — the agent never runs it (see Build & Branch Sync Rules). Never `git add` them.
 - When you change source files inside `Mobile Team Agent/`, just commit the source changes — no zip rebuild step.
 - Keep `Mobile Team Agent/CLAUDE.md` in sync with this file when agent rules change — they should match.
 

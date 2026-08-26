@@ -27,6 +27,17 @@ class GitSkill extends BaseSkill {
         },
       },
       {
+        name: "check_branch_sync",
+        description: "Check whether the local branch is in sync with its remote before any work starts. Fetches remote-tracking refs (read-only) and reports ahead/behind counts. Never pulls — if the branch is behind, the developer runs 'git pull' themselves.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            fetch: { type: "boolean", description: "Fetch remote refs first for accurate counts (default: true)" },
+            repo_path: { type: "string", description: "Project path (defaults to the configured repo)" },
+          },
+        },
+      },
+      {
         name: "get_commit_details",
         description: "Get full details for a specific commit: diff stats, actual code changes (patch), files modified, and linked Jira tickets.",
         inputSchema: {
@@ -104,6 +115,38 @@ class GitSkill extends BaseSkill {
           }
         }
 
+        return this.textResponse(out);
+      }
+
+      case "check_branch_sync": {
+        const s = await GitUtils.getBranchSyncStatus(args.repo_path || getRepoPath(), args.fetch !== false);
+
+        if (!s.upstream) {
+          return this.textResponse(
+            `Branch: ${s.branch}\nNo upstream branch is configured — nothing to compare against.\n` +
+            `Set one with: git push -u origin ${s.branch}${s.dirty ? "\n\nNote: you have uncommitted changes." : ""}`
+          );
+        }
+
+        let out = `Branch: ${s.branch} → ${s.upstream}\n`;
+        if (!s.fetched && args.fetch !== false) {
+          out += `Warning: could not fetch remote refs (${s.fetchError || "unknown reason"}) — counts may be stale.\n`;
+        }
+        out += "\n";
+
+        if (s.behind === 0 && s.ahead === 0) {
+          out += `In sync with the remote. Safe to start working.\n`;
+        } else if (s.behind > 0 && s.ahead === 0) {
+          out += `BEHIND by ${s.behind} commit${s.behind === 1 ? "" : "s"}.\n`;
+          out += `Run 'git pull' before making any changes — do not edit files until the branch is up to date.\n`;
+        } else if (s.ahead > 0 && s.behind === 0) {
+          out += `Ahead by ${s.ahead} commit${s.ahead === 1 ? "" : "s"} — nothing to pull. Safe to work; push when ready.\n`;
+        } else {
+          out += `DIVERGED — ${s.behind} behind, ${s.ahead} ahead.\n`;
+          out += `Run 'git pull' (or rebase) before making any changes.\n`;
+        }
+
+        if (s.dirty) out += `\nYou have uncommitted local changes — commit or stash them before pulling.\n`;
         return this.textResponse(out);
       }
 

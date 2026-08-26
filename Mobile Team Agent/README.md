@@ -170,6 +170,7 @@ Clear requests still run immediately — `"fix this function"` with the function
 | Tool | What it does | Say |
 |------|-------------|-----|
 | `get_recent_commits` | Git log with Jira linking, file diff stats, work area analysis | `"show my recent commits"` / `"what did I commit today?"` |
+| `check_branch_sync` | Check the local branch against its remote before work starts — fetches refs (read-only), reports ahead/behind, and says when a `git pull` is needed. Never pulls | `"am I up to date?"` / `"is my branch synced?"` |
 | `get_commit_details` | Full commit deep-dive: patch, files changed, lines +/-, Jira tickets | `"show changes in commit abc1234"` |
 
 ---
@@ -345,6 +346,22 @@ When you say `"invoke mobile-team-agent"` or `"good morning"` next day, this sna
 | 80–99% | 🟡 Partial |
 | 50–79% | 🟠 Low |
 | < 50% | 🔴 CRITICAL — generate tests |
+
+---
+
+## 🔧 Build & Branch Sync Rules
+
+**The agent never builds your project.** No `npm run build`, `expo prebuild`, `pod install`, `xcodebuild`, `gradlew`, or `run-ios`/`run-android` — when a build or native rebuild is needed it tells you and hands you the exact command. Running tests (`run_tests`, `generate_unit_tests`, `check_test_coverage`) is not a build and still happens automatically after development.
+
+**The agent checks remote sync before it starts.** At session start, right after activation, it runs `check_branch_sync`:
+
+| Result | What the agent does |
+|--------|--------------------|
+| In sync | Says the branch is up to date, then continues |
+| Behind / diverged | Tells you to run `git pull` first and makes no edits until you have |
+| No upstream | Says so and continues |
+
+It never runs `git pull`, `git merge`, or `git rebase` itself — only a read-only fetch of remote-tracking refs.
 
 ---
 
