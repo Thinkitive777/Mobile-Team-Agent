@@ -64,4 +64,29 @@ module.exports = Object.freeze({
 
   // Ticket ID regex
   TICKET_ID_PATTERN: /[A-Z][A-Z0-9]+-\d+/g,
+
+  // ── Pre-PR risk model ────────────────────────────────────────────────
+  // Points per driver and the ceiling each one may contribute. Caps exist so
+  // one pathological input (a 4000-line lockfile) cannot swamp real signal.
+  // Tune these against real branches — logic lives in Utils/risk-model.js and
+  // does not need to change when weights do.
+  RISK_WEIGHTS: {
+    native_code:       { points: 25, cap: 25 },
+    shared_fanin:      { points: 2,  cap: 20, minDependents: 5 },
+    dep_major:         { points: 12, cap: 25, lockfileOnly: 3 },
+    test_gap:          { points: 3,  cap: 18 },
+    migration_config:  { points: 15, cap: 15 },
+    merge_conflicts:   { points: 2,  cap: 15 },
+    staleness:         { points: 1,  cap: 10, per: 10 },
+    fragile_paths:     { points: 5,  cap: 10 },
+    churn:             { points: 1,  cap: 10, per: 150 },
+  },
+
+  // Score -> band. Deliberately reuses the repo's LOW/MEDIUM/HIGH vocabulary
+  // from the Change Safety Protocol rather than inventing a second taxonomy.
+  RISK_BANDS: [
+    { max: 29,  band: 'LOW' },
+    { max: 59,  band: 'MEDIUM' },
+    { max: 100, band: 'HIGH' },
+  ],
 });
