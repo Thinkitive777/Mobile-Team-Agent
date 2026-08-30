@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Claude Code Team Kit — team presentation</title>
+<style>
+/* =========================================================================
+   Self-contained. No external requests. Works offline, double-click to open.
+   Keys: → / space / click = next · ← = back · T = theme · O = overview · F = fullscreen
+   ========================================================================= */
+:root{
+  --ground:#F3F5F8; --surface:#FFFFFF; --surface-2:#E9EDF3;
+  --ink:#14171E; --muted:#5B6272; --faint:#8A92A2;
+  --rule:#D8DDE6; --rule-strong:#B6BFCE;
+  --accent:#2947C9; --accent-soft:#E2E7FB;
+  --blocked:#A93544; --blocked-soft:#F8E5E7;
+  --allowed:#1B6E52; --allowed-soft:#DEF0E8;
+  --warn:#9C6416;   --warn-soft:#F8ECD8;
+  --f-sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --f-mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#0E1116; --surface:#161A21; --surface-2:#1E232C;
+    --ink:#E4E7ED; --muted:#9AA2B2; --faint:#6E7789;
+    --rule:#272D38; --rule-strong:#3C4453;
+    --accent:#8AA2FF; --accent-soft:#1A2240;
+    --blocked:#E98996; --blocked-soft:#331A1F;
+    --allowed:#5CC49B; --allowed-soft:#12291F;
+    --warn:#DCA85E;   --warn-soft:#2C2210;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0E1116; --surface:#161A21; --surface-2:#1E232C;
+  --ink:#E4E7ED; --muted:#9AA2B2; --faint:#6E7789;
+  --rule:#272D38; --rule-strong:#3C4453;
+  --accent:#8AA2FF; --accent-soft:#1A2240;
+  --blocked:#E98996; --blocked-soft:#331A1F;
+  --allowed:#5CC49B; --allowed-soft:#12291F;
+  --warn:#DCA85E;   --warn-soft:#2C2210;
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--ground);color:var(--ink);
+  font-family:var(--f-sans);font-size:16px;line-height:1.55;
+  -webkit-font-smoothing:antialiased;overflow:hidden;
+}
+
+/* ---------- slide frame ---------- */
+.deck{position:relative;height:100vh;width:100vw}
+.slide{
+  position:absolute;inset:0;
+  display:none;
+  padding:clamp(32px,5vh,64px) clamp(28px,6vw,96px) 78px;
+  overflow-y:auto;
+}
+.slide.on{display:flex;flex-direction:column;justify-content:center}
+.slide.on > *{animation:rise .32s cubic-bezier(.2,.7,.3,1) both}
+.slide.on > *:nth-child(2){animation-delay:.05s}
+.slide.on > *:nth-child(3){animation-delay:.1s}
+.slide.on > *:nth-child(4){animation-delay:.15s}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.slide.on > *{animation:none}}
+
+.inner{width:100%;max-width:1080px;margin:0 auto}
+
+/* ---------- type ---------- */
+.eyebrow{
+  font-family:var(--f-mono);font-size:12px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--accent);margin:0 0 18px;font-weight:600;
+}
+.eyebrow.plain{color:var(--faint)}
+h1{
+  font-family:var(--f-mono);font-weight:700;
+  font-size:clamp(34px,5.4vw,64px);line-height:1.04;letter-spacing:-.035em;
+  margin:0 0 20px;text-wrap:balance;
+}
+h2{
+  font-family:var(--f-mono);font-weight:700;
+  font-size:clamp(26px,3.6vw,44px);line-height:1.08;letter-spacing:-.03em;
+  margin:0 0 8px;text-wrap:balance;
+}
+.sub{font-size:clamp(16px,1.7vw,20px);color:var(--muted);max-width:62ch;margin:0 0 26px}
+.sub strong{color:var(--ink);font-weight:600}
+h3{font-size:14px;font-weight:600;margin:0 0 10px;letter-spacing:.01em}
+p{margin:0 0 12px;max-width:64ch}
+code{
+  font-family:var(--f-mono);font-size:.88em;
+  background:var(--surface-2);padding:1px 5px;border-radius:3px;
+}
+b{font-weight:600}
+
+/* ---------- title slide ---------- */
+.statusline{
+  font-family:var(--f-mono);font-size:clamp(11px,1.15vw,13.5px);
+  color:var(--muted);display:flex;flex-wrap:wrap;align-items:center;gap:0 10px;
+  border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  padding:10px 0;margin:0 0 30px;
+}
+.statusline .sep{color:var(--rule-strong)}
+.statusline b{color:var(--ink);font-weight:600}
+.statusline .hot{color:var(--warn);font-weight:600}
+.byline{font-family:var(--f-mono);font-size:13px;color:var(--faint);margin:24px 0 0}
+
+/* ---------- grids ---------- */
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.three{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+.card{
+  background:var(--surface);border:1px solid var(--rule);border-radius:7px;
+  padding:16px 18px;
+}
+.card .k{
+  font-family:var(--f-mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--faint);margin:0 0 7px;
+}
+.card .v{font-size:15px;font-weight:600;margin:0 0 5px}
+.card p{font-size:14px;color:var(--muted);margin:0;max-width:none}
+.card.hi{background:var(--accent-soft);border-color:transparent}
+.card.hi .k{color:var(--accent)}
+
+/* ---------- stat ---------- */
+.stat{font-family:var(--f-mono);font-size:clamp(30px,4vw,46px);font-weight:700;letter-spacing:-.03em;line-height:1;margin:0 0 6px}
+.stat.no{color:var(--blocked)} .stat.ok{color:var(--allowed)} .stat.ac{color:var(--accent)}
+
+/* ---------- table ---------- */
+.tablewrap{overflow:auto;border:1px solid var(--rule);border-radius:7px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:clamp(12.5px,1.35vw,14.5px);min-width:540px}
+th,td{text-align:left;padding:9px 15px;border-bottom:1px solid var(--rule);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+th{
+  font-family:var(--f-mono);font-weight:600;font-size:11px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--faint);background:var(--surface-2);white-space:nowrap;
+}
+td.said{font-family:var(--f-mono);color:var(--muted);font-size:.92em}
+.chip{
+  font-family:var(--f-mono);font-size:11.5px;font-weight:600;
+  padding:2px 8px;border-radius:3px;white-space:nowrap;display:inline-block;
+}
+.chip.no{color:var(--blocked);background:var(--blocked-soft)}
+.chip.ok{color:var(--allowed);background:var(--allowed-soft)}
+.chip.wa{color:var(--warn);background:var(--warn-soft)}
+
+/* ---------- layers ---------- */
+.layers{display:flex;flex-direction:column-reverse;gap:9px}
+.layer{
+  display:grid;grid-template-columns:104px minmax(0,1fr);gap:18px;align-items:center;
+  background:var(--surface);border:1px solid var(--rule);border-left:4px solid var(--rule-strong);
+  border-radius:6px;padding:15px 20px;
+}
+.layer.l3{border-left-color:var(--accent);background:var(--accent-soft)}
+.layer .tag{font-family:var(--f-mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+.layer.l3 .tag{color:var(--accent)}
+.layer .body{font-size:15px}
+.layer .body span{color:var(--muted)}
+
+/* ---------- pre ---------- */
+pre{
+  font-family:var(--f-mono);font-size:clamp(11.5px,1.25vw,14px);line-height:1.62;
+  margin:0;padding:16px 18px;background:var(--surface);
+  border:1px solid var(--rule);border-radius:7px;overflow:auto;color:var(--ink);
+}
+pre .c{color:var(--faint)} pre .r{color:var(--blocked)} pre .g{color:var(--allowed)}
+pre .a{color:var(--accent)} pre .w{color:var(--warn)}
+
+/* ---------- sequence ---------- */
+.seq{list-style:none;margin:0;padding:0}
+.seq li{
+  display:grid;grid-template-columns:30px minmax(0,1fr);gap:14px;
+  padding:9px 0;border-bottom:1px solid var(--rule);font-size:15px;
+}
+.seq li:last-child{border-bottom:none}
+.seq .s{font-family:var(--f-mono);font-size:12px;color:var(--faint);padding-top:3px}
+.seq .who{
+  font-family:var(--f-mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--accent);display:block;
+}
+.seq .who.you{color:var(--warn)}
+
+.note{
+  border-left:3px solid var(--accent);padding:4px 0 4px 16px;
+  color:var(--muted);font-size:15px;max-width:66ch;margin-top:20px;
+}
+.note b{color:var(--ink)}
+
+/* ---------- chrome ---------- */
+.bar{
+  position:fixed;left:0;right:0;bottom:0;height:56px;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 clamp(20px,4vw,44px);
+  border-top:1px solid var(--rule);background:var(--ground);
+  font-family:var(--f-mono);font-size:12px;color:var(--faint);
+  z-index:20;
+}
+.bar .t{color:var(--muted)}
+.bar .r{display:flex;align-items:center;gap:16px}
+.bar button{
+  font:inherit;color:var(--faint);background:none;border:1px solid var(--rule);
+  border-radius:4px;padding:3px 9px;cursor:pointer;
+}
+.bar button:hover{color:var(--ink);border-color:var(--rule-strong)}
+.count{color:var(--ink);font-variant-numeric:tabular-nums}
+.prog{position:fixed;left:0;bottom:56px;height:2px;background:var(--accent);z-index:21;transition:width .25s ease}
+
+/* ---------- overview ---------- */
+.ov{
+  position:fixed;inset:0;background:var(--ground);z-index:40;display:none;
+  overflow:auto;padding:36px clamp(20px,4vw,44px) 80px;
+}
+.ov.on{display:block}
+.ov h4{font-family:var(--f-mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:0 0 18px}
+.ovgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
+.ovcard{
+  text-align:left;font:inherit;cursor:pointer;background:var(--surface);
+  border:1px solid var(--rule);border-radius:6px;padding:13px 15px;color:var(--ink);
+}
+.ovcard:hover{border-color:var(--accent)}
+.ovcard .n{font-family:var(--f-mono);font-size:11px;color:var(--faint);display:block;margin-bottom:5px}
+.ovcard .tt{font-size:14px;font-weight:600;line-height:1.3}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ---------- print ---------- */
+@media print{
+  @page{size:landscape;margin:14mm}
+  body{overflow:visible;background:#fff;color:#000}
+  .bar,.prog,.ov{display:none !important}
+  .deck{height:auto}
+  .slide{display:flex !important;position:static;page-break-after:always;height:auto;min-height:auto;padding:0 0 18mm;overflow:visible}
+  .slide.on > *{animation:none}
+}
+</style>
+</head>
+<body>
+
+<div class="deck" id="deck">
+
+  <!-- 1 -->
+  <section class="slide" data-title="Title">
+    <div class="inner">
+      <p class="eyebrow">Internal tooling</p>
+      <h1>Claude Code<br>Team Kit</h1>
+      <div class="statusline">
+        <span>●&nbsp;<b>Opus 5</b></span><span class="sep">│</span>
+        <span class="hot">!&nbsp;ctx 82%</span><span class="sep">│</span>
+        <span>myapp</span><span class="sep">│</span>
+        <span>▸&nbsp;<b>auth-refactor</b></span>
+      </div>
+      <p class="sub">A folder committed to the repo. It blocks Git write commands unless the developer asked for them in the same message, shows which model is active, warns at 80% and 90% context use, and writes a task summary file before <code>/compact</code>. <strong>Every developer on the repo gets the same behaviour.</strong></p>
+      <p class="byline">Uses only existing Claude Code mechanisms: CLAUDE.md · hooks · skill · slash commands · settings.json</p>
+    </div>
+  </section>
+
+  <!-- 2 -->
+  <section class="slide" data-title="Problems it fixes">
+    <div class="inner">
+      <p class="eyebrow">01 — The problem</p>
+      <h2>Four problems it fixes</h2>
+      <p class="sub">Each of these happened while using Claude Code on our projects.</p>
+      <div class="two">
+        <div class="card"><p class="k">Git</p><p class="v">Claude commits and pushes without being asked</p><p>You ask it to fix a bug. It fixes the bug, then runs <code>git add</code>, <code>git commit</code> and <code>git push</code>. You never requested any Git action.</p></div>
+        <div class="card"><p class="k">Lost work</p><p class="v">Claude runs destructive Git commands</p><p><code>git reset --hard</code>, <code>git clean -fd</code>, <code>git checkout --</code>. Uncommitted changes are deleted and cannot be recovered.</p></div>
+        <div class="card"><p class="k">Context</p><p class="v">/compact removes task information</p><p>Decisions, file changes and findings from the session are compressed away. The next session does not have them.</p></div>
+        <div class="card"><p class="k">Consistency</p><p class="v">Behaviour differs per developer</p><p>Each developer writes their own prompts, so the output depends on who is using it. There is no shared standard.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 -->
+  <section class="slide" data-title="What I built">
+    <div class="inner">
+      <p class="eyebrow">02 — What I built</p>
+      <h2>What gets added to the repo</h2>
+      <p class="sub">Cloning the repo is the whole setup. There is no per-developer install step.</p>
+      <pre><span class="c">repo/</span>
+  CLAUDE.md                        <span class="c">15 rules, read every turn</span>
+  .claude/settings.json            <span class="c">wiring: hooks, permissions, status line</span>
+  .claude/hooks/                   <span class="c">5 scripts that actually enforce things</span>
+  .claude/skills/context-handoff/  <span class="c">handoff format, loaded only when used</span>
+  .claude/commands/                <span class="c">/handoff /checkpoint /context /unknowns /resume-handoff</span>
+  .claude/scripts/                 <span class="c">data source for /context</span>
+  .claude/checkpoints/             <span class="c">working notes — gitignored</span>
+  docs/handoffs/                   <span class="c">finished-task records — committed</span>
+  docs/guide/                      <span class="c">8-chapter manual</span></pre>
+      <p class="note">Install is one command: <code>./install.sh /path/to/repo</code>. If the repo already has a <code>settings.json</code>, the installer merges into it instead of replacing it.</p>
+    </div>
+  </section>
+
+  <!-- 4 -->
+  <section class="slide" data-title="Three enforcement levels">
+    <div class="inner">
+      <p class="eyebrow">03 — How rules are enforced</p>
+      <h2>Rules are enforced at three different levels</h2>
+      <p class="sub">Git commands and model detection are enforced by shell scripts. Style and reasoning rules are instructions only.</p>
+      <div class="layers">
+        <div class="layer l1"><span class="tag">Layer 1</span><span class="body"><b>Instructions</b> — <span>CLAUDE.md, the skill, the commands. The model reads them and usually follows them.</span></span></div>
+        <div class="layer l2"><span class="tag">Layer 2</span><span class="body"><b>Permissions</b> — <span>settings.json <code>ask</code> rules. Claude Code asks the developer before running the command.</span></span></div>
+        <div class="layer l3"><span class="tag">Layer 3</span><span class="body"><b>Hooks</b> — <span>shell scripts that return exit 2 and stop the command. The model cannot override this.</span></span></div>
+      </div>
+      <p class="note">Git safety and model detection are at <b>Layer 3</b>. Rules like “do not assume” and “use simple English” are at Layer 1 only, because no script can check whether they were followed. The documentation states this.</p>
+    </div>
+  </section>
+
+  <!-- 5 -->
+  <section class="slide" data-title="Git command rules">
+    <div class="inner">
+      <p class="eyebrow">04 — Git safety</p>
+      <h2>Git write commands need a Git request in the same message</h2>
+      <p class="sub">Permission applies to one message only. The rows below are output from running the hook, not examples.</p>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Your last message</th><th>Command Claude tried</th><th>Result</th></tr></thead>
+          <tbody>
+            <tr><td class="said">fix the login bug</td><td><code>git status</code></td><td><span class="chip ok">exit 0 · allowed</span></td></tr>
+            <tr><td class="said">fix the login bug</td><td><code>git add . &amp;&amp; git commit</code></td><td><span class="chip no">exit 2 · blocked</span></td></tr>
+            <tr><td class="said">fix the login bug</td><td><code>git push origin HEAD</code></td><td><span class="chip no">exit 2 · blocked</span></td></tr>
+            <tr><td class="said">commit these changes</td><td><code>git add -A</code> · <code>commit</code> · <code>push</code></td><td><span class="chip ok">exit 0 · allowed</span></td></tr>
+            <tr><td class="said">commit these changes</td><td><code>git reset --hard</code></td><td><span class="chip no">exit 2 · blocked</span></td></tr>
+            <tr><td class="said">do a hard reset, discard my changes</td><td><code>git reset --hard HEAD</code></td><td><span class="chip ok">exit 0 · allowed</span></td></tr>
+            <tr><td class="said">do a hard reset, discard my changes</td><td><code>git push --force</code></td><td><span class="chip no">exit 2 · blocked</span></td></tr>
+            <tr><td class="said">force push this branch</td><td><code>git push --force-with-lease</code></td><td><span class="chip ok">exit 0 · allowed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">Asking for one destructive operation does not permit a different one. Read-only Git commands — <code>status</code>, <code>diff</code>, <code>log</code>, <code>show</code> — are always allowed.</p>
+    </div>
+  </section>
+
+  <!-- 6 -->
+  <section class="slide" data-title="How the guard decides">
+    <div class="inner">
+      <p class="eyebrow">05 — How it works</p>
+      <h2>How the Git guard decides</h2>
+      <p class="sub">Two hooks. One saves the developer's message, the other checks it before any Bash command runs.</p>
+      <pre><span class="c">You type a message</span>
+      │
+      ▼
+<span class="a">UserPromptSubmit hook</span>  →  saves your exact words to
+                          $TMPDIR/claude-team-guard/&lt;session&gt;.prompt
+      │
+      ▼
+<span class="c">Claude decides to run:  git commit -m "fix"</span>
+      │
+      ▼
+<span class="a">PreToolUse(Bash) hook</span>  →  reads your saved message, matches intent
+                          <span class="g">exit 0</span> = allow      <span class="r">exit 2</span> = block</pre>
+      <div class="two" style="margin-top:16px">
+        <div class="card"><p class="k">Text returned to Claude when blocked</p><p style="font-family:var(--f-mono);font-size:12.5px;color:var(--muted)">“Do NOT retry this command. Do NOT work around this hook. Ask the user to reply with the Git action.”</p></div>
+        <div class="card"><p class="k">Turning the guard off</p><p>For a single command:<br><code>THINKTEAM_GIT_GUARD=off git rebase main</code></p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 -->
+  <section class="slide" data-title="Task summary files">
+    <div class="inner">
+      <p class="eyebrow">06 — Context handoff</p>
+      <h2>A task summary file is written before /compact</h2>
+      <p class="sub">One file per task, committed to the repo. It records decisions, changed files, risks, validation and the next step.</p>
+      <ol class="seq">
+        <li><span class="s">01</span><span><span class="who">Claude</span>Task finishes. Prints <code>CONTEXT HANDOFF AVAILABLE</code> and asks. No file is written yet.</span></li>
+        <li><span class="s">02</span><span><span class="who you">You</span>Say yes.</span></li>
+        <li><span class="s">03</span><span><span class="who">Claude</span>Writes <code>docs/handoffs/2026-08-26-refactor-auth.md</code> — decisions, changed files, risks, validation, next step.</span></li>
+        <li><span class="s">04</span><span><span class="who">Claude</span>Prints <code>CONTEXT HANDOFF SAVED — YOU CAN NOW USE /compact</code> and names what to preserve.</span></li>
+        <li><span class="s">05</span><span><span class="who you">You</span>Run <code>/compact</code>. Claude never runs it for you.</span></li>
+      </ol>
+      <p class="note">Each file ends with a <b>Compact Focus</b> section listing what to keep in detail and what to summarise, so the compaction is guided. <code>/checkpoint</code> writes the same kind of file for a task that is still in progress.</p>
+    </div>
+  </section>
+
+  <!-- 8 -->
+  <section class="slide" data-title="Context warnings">
+    <div class="inner">
+      <p class="eyebrow">07 — Context budget</p>
+      <h2>Context usage warnings at 80% and 90%</h2>
+      <p class="sub">The percentage comes from the <code>context_window.used_percentage</code> value Claude Code sends to the status line. It is not estimated. If that value is unavailable, the system reports <code>unknown</code>.</p>
+      <div class="two">
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>Used</th><th>Status line</th><th>What happens</th></tr></thead>
+            <tbody>
+              <tr><td>under 60%</td><td><code>ctx 42%</code></td><td>nothing</td></tr>
+              <tr><td>60–79%</td><td><code>ctx 64%</code></td><td>status line only</td></tr>
+              <tr><td>80–89%</td><td><code>! ctx 82%</code></td><td><span class="chip wa">one warning</span></td></tr>
+              <tr><td>90%+</td><td><code>!! ctx 91%</code></td><td><span class="chip wa">one stronger warning</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <pre><span class="c"># fires ONCE per band, per session</span>
+<span class="w"># **CONTEXT WARNING — ~82% USED**</span>
+&gt; Consider /checkpoint → /compact
+&gt; before continuing.</pre>
+          <p class="note" style="margin-top:14px">Each band fires once per session. The warning is not repeated on every reply.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9 -->
+  <section class="slide" data-title="Model detection">
+    <div class="inner">
+      <p class="eyebrow">08 — Model detection</p>
+      <h2>Fable 5 is detected and shown on every reply</h2>
+      <p class="sub">The hook reads the session transcript and takes <code>message.model</code> from the last assistant reply. Fable 5 can use more of the expensive allocation than the default model.</p>
+      <pre><span class="c">status line — always visible</span>
+<span class="w">⚠️  FABLE 5 — HIGH USAGE</span>  │  ctx 34%  │  myapp
+
+<span class="c">every reply while it is active</span>
+<span class="w"># **⚠️ FABLE 5 IS ACTIVE — USAGE MAY BE HIGHER**</span>
+
+<span class="c">first turn only — then it stops asking</span>
+&gt; It may use more of the expensive team allocation.
+&gt; Do you want to continue with Fable 5?</pre>
+      <p class="note">Claude cannot change its own model. The rules forbid it from stating that it did. The developer changes the model with <code>/model</code>.</p>
+    </div>
+  </section>
+
+  <!-- 10 -->
+  <section class="slide" data-title="Token cost">
+    <div class="inner">
+      <p class="eyebrow">09 — Token discipline</p>
+      <h2>Token cost of the rules</h2>
+      <p class="sub"><code>CLAUDE.md</code> is re-read on every turn, so its length is a permanent cost. Only rules needed every turn are kept there.</p>
+      <div class="three">
+        <div class="card hi"><p class="k">CLAUDE.md</p><p class="v">244 lines</p><p>Rules needed on every turn. Read on every turn.</p></div>
+        <div class="card"><p class="k">Skill</p><p class="v">209 lines</p><p>Handoff and checkpoint templates. Loaded only when one is being written.</p></div>
+        <div class="card"><p class="k">Hooks</p><p class="v">0 tokens idle</p><p>Each hook prints nothing unless a warning applies, so a normal turn adds no tokens.</p></div>
+      </div>
+      <p class="note" style="margin-top:22px">CLAUDE.md also sets a search order for Claude: known file → known folder → grep → broad search. Work that requires reading many files is sent to a <b>subagent</b>; the subagent reads the files and returns only its result to the main session.</p>
+    </div>
+  </section>
+
+  <!-- 11 -->
+  <section class="slide" data-title="Adoption">
+    <div class="inner">
+      <p class="eyebrow">10 — Adoption</p>
+      <h2>Installing it in a repo</h2>
+      <div class="two">
+        <div>
+          <pre>./install.sh /path/to/repo</pre>
+          <ol class="seq" style="margin-top:14px">
+            <li><span class="s">01</span><span>Add a <code>## This project</code> section to <code>CLAUDE.md</code> — stack, build, test, layout. Under 30 lines.</span></li>
+            <li><span class="s">02</span><span>Commit <code>CLAUDE.md</code> and <code>.claude/</code>.</span></li>
+            <li><span class="s">03</span><span>Restart Claude Code.</span></li>
+          </ol>
+        </div>
+        <div class="three" style="grid-template-columns:1fr">
+          <div class="card"><p class="stat ac">28</p><p class="k" style="margin:0">files installed, tested end to end</p></div>
+          <div class="card"><p class="stat ok">0</p><p class="k" style="margin:0">per-developer setup steps</p></div>
+          <div class="card"><p class="stat">~30 min</p><p class="k" style="margin:0">one-time work per repo</p></div>
+        </div>
+      </div>
+      <p class="note">An existing <code>settings.json</code> is merged, not overwritten: the repo's current hooks, permissions and status line are kept. Removing the kit takes two commands.</p>
+    </div>
+  </section>
+
+  <!-- 12 -->
+  <section class="slide" data-title="Not enforced">
+    <div class="inner">
+      <p class="eyebrow">11 — Honest limits</p>
+      <h2>What this does not enforce</h2>
+      <p class="sub">These limits are listed in the documentation as well as here.</p>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Cannot be enforced</th><th>What holds instead</th></tr></thead>
+          <tbody>
+            <tr><td>Bypass permission mode skips permission rules</td><td>The hook still runs, but a developer who wants to get around their own tooling can. It prevents accidental commands, not deliberate ones.</td></tr>
+            <tr><td>“No assumptions” cannot be checked by a script</td><td>It is a rule in CLAUDE.md. It is not enforced.</td></tr>
+            <tr><td>Git permission is matched by keyword</td><td>“Don't push this yet” contains the word <i>push</i>, so it would grant permission for that turn. CLAUDE.md is the second check.</td></tr>
+            <tr><td>The Fable warning does not appear on turn 1</td><td>There is no assistant reply yet to read the model from. The status line shows it correctly from the start.</td></tr>
+            <tr><td>Detecting that a new task started</td><td>A hook cannot tell a new task from a follow-up question, so this is left to the model.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 13 -->
+  <section class="slide" data-title="Summary">
+    <div class="inner">
+      <p class="eyebrow plain">Summary</p>
+      <h2>What the kit does</h2>
+      <div class="two" style="margin-top:26px">
+        <div class="card"><p class="k">Behaviour</p><p>Blocks unrequested Git write commands · blocks destructive Git unless named · writes task summary files before <code>/compact</code> · warns at 80% and 90% context · shows the active model · same rules for every developer on the repo.</p></div>
+        <div class="card"><p class="k">Verification</p><p>Every behaviour shown here was produced by running the hooks. Line counts were measured. The installer was tested into a clean repo and into a repo with existing settings. An 8-chapter manual is in <code>docs/guide/</code>.</p></div>
+      </div>
+      <div class="statusline" style="margin-top:32px;border-bottom:none">
+        <span>●&nbsp;<b>Opus 5</b></span><span class="sep">│</span>
+        <span>ctx 41%</span><span class="sep">│</span>
+        <span>myapp</span><span class="sep">│</span>
+        <span>questions?</span>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<div class="prog" id="prog"></div>
+<div class="bar">
+  <span class="t" id="title">Claude Code Team Kit</span>
+  <span class="r">
+    <button id="ovbtn" type="button">overview</button>
+    <button id="thbtn" type="button">theme</button>
+    <span>← →</span>
+    <span class="count"><span id="cur">1</span> / <span id="tot">13</span></span>
+  </span>
+</div>
+
+<div class="ov" id="ov">
+  <h4>Slides — click to jump · Esc to close</h4>
+  <div class="ovgrid" id="ovgrid"></div>
+</div>
+
+<script>
+(function () {
+  var slides = Array.prototype.slice.call(document.querySelectorAll(".slide"));
+  var cur = document.getElementById("cur");
+  var tot = document.getElementById("tot");
+  var title = document.getElementById("title");
+  var prog = document.getElementById("prog");
+  var ov = document.getElementById("ov");
+  var grid = document.getElementById("ovgrid");
+  var i = 0;
+
+  tot.textContent = slides.length;
+
+  slides.forEach(function (s, n) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "ovcard";
+    b.innerHTML = '<span class="n">' + String(n + 1).padStart(2, "0") + "</span>";
+    var t = document.createElement("span");
+    t.className = "tt";
+    t.textContent = s.getAttribute("data-title") || "Slide " + (n + 1);
+    b.appendChild(t);
+    b.addEventListener("click", function () { go(n); closeOv(); });
+    grid.appendChild(b);
+  });
+
+  function go(n) {
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach(function (s, k) { s.classList.toggle("on", k === i); });
+    cur.textContent = i + 1;
+    title.textContent = slides[i].getAttribute("data-title") || "";
+    prog.style.width = ((i + 1) / slides.length * 100) + "%";
+    if (location.hash !== "#" + (i + 1)) history.replaceState(null, "", "#" + (i + 1));
+  }
+  function next() { go(i + 1); }
+  function prev() { go(i - 1); }
+  function closeOv() { ov.classList.remove("on"); }
+  function toggleOv() { ov.classList.toggle("on"); }
+
+  function toggleTheme() {
+    var root = document.documentElement;
+    var now = root.getAttribute("data-theme");
+    if (!now) {
+      var darkOS = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      now = darkOS ? "dark" : "light";
+    }
+    root.setAttribute("data-theme", now === "dark" ? "light" : "dark");
+  }
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowRight" || e.key === "PageDown") { next(); e.preventDefault(); }
+    else if (e.key === "ArrowLeft" || e.key === "PageUp") { prev(); e.preventDefault(); }
+    else if (e.key === " ") { next(); e.preventDefault(); }
+    else if (e.key === "Home") { go(0); }
+    else if (e.key === "End") { go(slides.length - 1); }
+    else if (e.key === "Escape") { closeOv(); }
+    else if (e.key === "o" || e.key === "O") { toggleOv(); }
+    else if (e.key === "t" || e.key === "T") { toggleTheme(); }
+    else if (e.key === "f" || e.key === "F") {
+      if (document.fullscreenElement) { document.exitFullscreen(); }
+      else if (document.documentElement.requestFullscreen) { document.documentElement.requestFullscreen(); }
+    }
+  });
+
+  document.getElementById("ovbtn").addEventListener("click", toggleOv);
+  document.getElementById("thbtn").addEventListener("click", toggleTheme);
+
+  document.getElementById("deck").addEventListener("click", function (e) {
+    if (e.target.closest("a,button,pre,table")) return;
+    next();
+  });
+
+  var x0 = null;
+  document.addEventListener("touchstart", function (e) { x0 = e.touches[0].clientX; }, { passive: true });
+  document.addEventListener("touchend", function (e) {
+    if (x0 === null) return;
+    var dx = e.changedTouches[0].clientX - x0;
+    if (Math.abs(dx) > 50) { dx < 0 ? next() : prev(); }
+    x0 = null;
+  }, { passive: true });
+
+  var start = parseInt((location.hash || "#1").slice(1), 10);
+  go(isNaN(start) ? 0 : start - 1);
+})();
+</script>
+</body>
+</html>
