@@ -6,7 +6,7 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 
 const {
-  GIT_DEFAULT_SINCE, GIT_MAX_BUFFER,
+  GIT_DEFAULT_SINCE, GIT_MAX_BUFFER, GIT_FETCH_TIMEOUT_MS,
   GIT_SHORT_HASH_LENGTH, GIT_LOG_FORMAT, TICKET_ID_PATTERN,
   DIFF_MAX_COMMITS, DIFF_MAX_LINES_PER_COMMIT, DIFF_SUMMARY_MAX_FILES,
 } = require('../Constants/constants');
@@ -601,6 +601,59 @@ class GitUtils {
         ticketIds: this.extractTicketIds(message),
       };
     });
+  }
+
+  /**
+   * Compare the current branch against its upstream.
+   * Fetches the remote-tracking refs first (read-only — never touches the
+   * working tree) so ahead/behind counts are accurate.
+   */
+  static async getBranchSyncStatus(repoPath = process.cwd(), doFetch = true) {
+    const run = (args, opts = {}) =>
+      execFileAsync('git', ['-C', repoPath, ...args], { maxBuffer: GIT_MAX_BUFFER, ...opts });
+
+    let branch;
+    try {
+      branch = (await run(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+    } catch (error) {
+      return this._handleGitError(error, 'getBranchSyncStatus');
+    }
+
+    let dirty = false;
+    try {
+      dirty = (await run(['status', '--porcelain'])).stdout.trim().length > 0;
+    } catch (_) { /* non-fatal */ }
+
+    let upstream = null;
+    try {
+      upstream = (await run(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'])).stdout.trim();
+    } catch (_) {
+      return { branch, upstream: null, ahead: 0, behind: 0, dirty, fetched: false, fetchError: null };
+    }
+
+    let fetched = false;
+    let fetchError = null;
+    if (doFetch) {
+      try {
+        await run(['fetch', '--quiet', upstream.split('/')[0]], { timeout: GIT_FETCH_TIMEOUT_MS });
+        fetched = true;
+      } catch (error) {
+        fetchError = (error.message || 'fetch failed').substring(0, 120);
+        Logger.debug('Git fetch failed', { error: fetchError });
+      }
+    }
+
+    let ahead = 0;
+    let behind = 0;
+    try {
+      const counts = (await run(['rev-list', '--left-right', '--count', `${upstream}...HEAD`])).stdout.trim().split(/\s+/);
+      behind = parseInt(counts[0], 10) || 0;
+      ahead = parseInt(counts[1], 10) || 0;
+    } catch (error) {
+      return this._handleGitError(error, 'getBranchSyncStatus');
+    }
+
+    return { branch, upstream, ahead, behind, dirty, fetched, fetchError };
   }
 
   static _handleGitError(error, method) {

@@ -41,6 +41,7 @@ module.exports = Object.freeze({
   GIT_DEFAULT_SINCE: '48 hours ago',
   GIT_SHORT_HASH_LENGTH: 7,
   GIT_MAX_BUFFER: 1024 * 1024,
+  GIT_FETCH_TIMEOUT_MS: 15000,
   GIT_LOG_FORMAT: '%H|%s|%ai|%an',
 
   // Display
