@@ -354,18 +354,72 @@ try {
   warn(`Could not install slash commands: ${err.message}`);
 }
 
+// ── User identity + team tracking setup ─────────────────────────────────
+// Writes display_name to preferences.json and the team webhook to config.json.
+// Both files live in ~/.mobile-team-agent/ and are never committed to git/npm.
+
+const readline = require('readline');
+const agentDir = path.join(os.homedir(), '.mobile-team-agent');
+const prefsFile = path.join(agentDir, 'preferences.json');
+const configFile = path.join(agentDir, 'config.json');
+
 console.log('');
-console.log(`${GREEN}============================================${NC}`);
-console.log(`${GREEN}  Setup Complete!${NC}`);
-console.log(`${GREEN}============================================${NC}`);
+info('Setting up your identity for team usage tracking...');
+console.log(`  ${CYAN}Agent usage is logged to your team's Google Chat.${NC}`);
+console.log(`  ${CYAN}Your name will appear next to each tool event.${NC}`);
 console.log('');
-console.log('  How to use:');
-console.log('    1. Open any terminal directory');
-console.log('    2. Run: claude');
-console.log('    3. Say: "invoke mobile-team-agent"');
-console.log('    4. Or say: "Good morning" for daily standup');
-console.log('');
-console.log('  First-time:');
-console.log('    - "configure jira" — connect your Jira instance');
-console.log('    - "configure figma" — connect Figma (optional)');
-console.log('');
+
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+rl.question('  Enter your full name (e.g. John Smith): ', (name) => {
+  rl.close();
+  const displayName = (name || '').trim();
+
+  if (displayName) {
+    // Write display_name → preferences.json
+    try {
+      fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+      let prefs = {};
+      if (fs.existsSync(prefsFile)) {
+        try { prefs = JSON.parse(fs.readFileSync(prefsFile, 'utf8')); } catch (_) {}
+      }
+      prefs.display_name = displayName;
+      fs.writeFileSync(prefsFile, JSON.stringify(prefs, null, 2), { mode: 0o600 });
+      success(`Identity saved: ${displayName}`);
+    } catch (err) {
+      warn(`Could not save display name: ${err.message}`);
+    }
+
+    // Write team webhook → config.json tracking section
+    try {
+      let cfg = {};
+      if (fs.existsSync(configFile)) {
+        try { cfg = JSON.parse(fs.readFileSync(configFile, 'utf8')); } catch (_) {}
+      }
+      if (!cfg.tracking) cfg.tracking = {};
+      cfg.tracking.webhook_url = 'https://chat.googleapis.com/v1/spaces/AAQAFRquAD0/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=1tte540KDT5IG9abZT5J_NT6Ns7EQsrCBgwr7oLFdtE';
+      fs.writeFileSync(configFile, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+      success('Team tracking configured.');
+    } catch (err) {
+      warn(`Could not write tracking config: ${err.message}`);
+    }
+  } else {
+    warn('No name entered — skipping identity setup. Run setup again or use set_preferences with display_name in the agent.');
+  }
+
+  console.log('');
+  console.log(`${GREEN}============================================${NC}`);
+  console.log(`${GREEN}  Setup Complete!${NC}`);
+  console.log(`${GREEN}============================================${NC}`);
+  console.log('');
+  console.log('  How to use:');
+  console.log('    1. Open any terminal directory');
+  console.log('    2. Run: claude');
+  console.log('    3. Say: "invoke mobile-team-agent"');
+  console.log('    4. Or say: "Good morning" for daily standup');
+  console.log('');
+  console.log('  First-time:');
+  console.log('    - "configure jira" — connect your Jira instance');
+  console.log('    - "configure figma" — connect Figma (optional)');
+  console.log('');
+});
