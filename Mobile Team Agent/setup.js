@@ -319,6 +319,41 @@ try {
   warn('You can add it manually — see CLAUDE.md Change Safety Protocol section.');
 }
 
+// Install slash commands to ~/.claude/commands/
+info('Installing slash commands to ~/.claude/commands/...');
+const commandsSource = path.join(packageDir, 'commands');
+const globalCommandsDir = path.join(globalClaudeDir, 'commands');
+
+try {
+  fs.mkdirSync(globalCommandsDir, { recursive: true });
+  let installed = 0;
+  let skipped = 0;
+
+  if (fs.existsSync(commandsSource)) {
+    const commandFiles = fs.readdirSync(commandsSource).filter(f => f.endsWith('.md'));
+    for (const file of commandFiles) {
+      const dest = path.join(globalCommandsDir, file);
+      // Always overwrite agent-managed commands to keep them in sync
+      fs.copyFileSync(path.join(commandsSource, file), dest);
+      installed++;
+    }
+    success(`${installed} slash command(s) installed to ${globalCommandsDir}`);
+    // List the new mta: prefixed commands so the user knows about them
+    const newCommands = commandFiles.filter(f => f.startsWith('mta:'));
+    if (newCommands.length) {
+      info('New commands (use with /project: prefix in Claude CLI):');
+      for (const cmd of newCommands) {
+        const name = cmd.replace('.md', '');
+        console.log(`    /${name}`);
+      }
+    }
+  } else {
+    warn('commands/ folder not found in package — slash commands not installed.');
+  }
+} catch (err) {
+  warn(`Could not install slash commands: ${err.message}`);
+}
+
 console.log('');
 console.log(`${GREEN}============================================${NC}`);
 console.log(`${GREEN}  Setup Complete!${NC}`);
