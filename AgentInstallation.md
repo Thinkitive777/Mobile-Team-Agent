@@ -1,45 +1,34 @@
 # Mobile Team Agent — Installation Guide
 
-## Step 1: Clone the repository
+## Fresh Install
 
 ```bash
-git clone https://github.com/Shekhar9398/Mobile-Team-Agent.git
+npm install -g mobile-team-agent
 ```
 
-## Step 2: Navigate to the project directory
+The installer runs automatically and will ask for your full name.
+
+---
+
+## Update (existing users)
 
 ```bash
-cd Mobile-Team-Agent/"Mobile Team Agent"
+npm install -g mobile-team-agent
+npx mobile-team-agent setup
 ```
 
-## Step 3: Make the script executable and run it
+> `npm update` does **not** trigger setup — always use `npm install -g` followed by `setup` when updating.
 
-```bash
-chmod +x install.sh && ./install.sh
-```
+---
 
-During installation you will be asked for:
+## What setup does
 
-1. **Your full name** — used to identify you in team usage reports (e.g. `John Smith`)
-2. **Team webhook URL** — ask your team lead for this; it connects your agent to the shared Google Chat channel
+1. Registers the agent with Claude CLI globally
+2. Installs agent instructions to `~/.claude/`
+3. Asks for your **full name** — shown in team usage reports
+4. Writes the team Google Chat webhook to `~/.mobile-team-agent/config.json`
 
-## Step 4: Set your display name in the agent (first session)
-
-After install, open Claude and say:
-
-```
-invoke mobile-team-agent
-```
-
-If your name is not yet saved, the agent will prompt:
-
-> ACTION REQUIRED: Please tell me your full name so I can identify you in team usage reports.
-
-Reply with your name or run:
-
-```
-set_preferences with display_name="Your Full Name"
-```
+---
 
 ## What is tracked?
 
@@ -48,12 +37,18 @@ Every tool the agent calls is logged to the team's Google Chat space with:
 - Your display name
 - Timestamp (IST)
 
-This gives the team lead visibility into which workflows are being used — no message content, no ticket data, no code.
+Runs silently in the background — never interrupts your workflow. The team is aware of this tracking.
 
-The team is aware of this tracking. It runs silently in the background and never interrupts your workflow.
+---
 
-## To update your display name later
+## Update your name later
 
+In Claude, say:
 ```
 set_preferences with display_name="New Name"
+```
+
+Or re-run setup:
+```bash
+npx mobile-team-agent setup
 ```
