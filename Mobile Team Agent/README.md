@@ -14,6 +14,9 @@ The **Mobile Team Agent** is an MCP (Model Context Protocol) server that plugs i
 npm install -g mobile-team-agent
 ```
 
+> 💡 Getting `EACCES` / "permission denied" / `mkdir '/usr/local/lib/node_modules/...'`?
+> See [**`npm install -g` fails with `EACCES`**](#npm-install--g-fails-with-eacces--permission-denied) below — do **not** just reach for `sudo`.
+
 Then run setup **from inside your project directory:**
 
 ```bash
@@ -35,6 +38,74 @@ npx mobile-team-agent setup
 cd /path/to/another/project
 npx mobile-team-agent setup
 ```
+
+### `npm install -g` fails with `EACCES` / permission denied
+
+```
+npm ERR!   syscall: 'mkdir',
+npm ERR!   path: '/usr/local/lib/node_modules/mobile-team-agent'
+npm ERR! The operation was rejected by your operating system.
+npm ERR! It is likely you do not have the permissions to access this file as the current user
+```
+
+This is **not** a problem with the agent — the package is published and downloads fine.
+Your Node installation put its global folder (`/usr/local/lib/node_modules`) under `root`,
+so a normal user can't write to it. Common on Linux and on Intel macOS where Node came
+from a `.pkg` installer or the system package manager.
+
+Pick **one** of the fixes below. **Fix A is recommended** — it never needs `sudo` again.
+
+**Fix A — give npm a global folder inside your home directory**
+
+```bash
+mkdir -p ~/.npm-global
+npm config set prefix ~/.npm-global
+echo 'export PATH=~/.npm-global/bin:$PATH' >> ~/.bashrc   # use ~/.zshrc on zsh
+source ~/.bashrc                                          # use ~/.zshrc on zsh
+npm install -g mobile-team-agent
+```
+
+**Fix B — install Node through nvm** (globals then live in your home dir permanently)
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+source ~/.bashrc
+nvm install 20
+npm install -g mobile-team-agent
+```
+
+**Fix C — take ownership of the existing npm folders**
+
+```bash
+sudo chown -R "$(whoami)" "$(npm config get prefix)/lib/node_modules" \
+                          "$(npm config get prefix)/bin" \
+                          "$(npm config get prefix)/share"
+npm install -g mobile-team-agent
+```
+
+**Fix D — `sudo` (last resort)**
+
+```bash
+sudo npm install -g mobile-team-agent
+```
+
+> 🚫 **Never run `setup` with `sudo`.** Setup writes to `~/.claude/`, `~/.claude.json` and your
+> project folder — running it as root creates root-owned files that Claude CLI can't read later.
+> Install with `sudo` if you must, then run setup as your normal user.
+
+**Verify the install, then run setup:**
+
+```bash
+npm root -g                              # should print a path you own
+ls "$(npm root -g)/mobile-team-agent"    # should list Main/, Skills/, setup.js
+cd /path/to/your/project
+mobile-team-agent setup                  # or: npx mobile-team-agent setup
+```
+
+> ℹ️ **Don't use bare `npx mobile-team-agent` *instead of* installing.** Setup registers the MCP
+> server by absolute path to wherever the package lives on disk. An npx-only run lives in npm's
+> `_npx` cache, which npm prunes — the registration would silently break later. Install the
+> package first (any fix above), then `npx` resolves that installed copy.
 
 ### Option 2 — Clone & install
 
@@ -490,6 +561,18 @@ npx mobile-team-agent setup   # writes CLAUDE.md into current directory
 **Hook blocking Claude mid-task?**
 ```bash
 npx mobile-team-agent setup   # updates hooks to non-blocking version
+```
+
+**`npm install -g` refused with `EACCES` / permission denied?**
+Your global npm folder is root-owned. See
+[**`npm install -g` fails with `EACCES`**](#npm-install--g-fails-with-eacces--permission-denied)
+in the Installation section — the recommended fix is a home-directory npm prefix, not `sudo`.
+
+**`mobile-team-agent: command not found` after installing?**
+The global bin folder isn't on your `PATH`:
+```bash
+echo "$(npm config get prefix)/bin"          # this folder must be on PATH
+export PATH="$(npm config get prefix)/bin:$PATH"   # add to ~/.bashrc or ~/.zshrc to persist
 ```
 
 **Manual MCP registration:**
