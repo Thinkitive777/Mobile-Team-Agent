@@ -166,6 +166,40 @@ if (!isOwnPackage) {
       '- my tickets / show tickets -> list_tickets',
       '- Ticket key (e.g. PROJ-42) -> select_ticket',
       '',
+      '## Build & Branch Sync (MANDATORY)',
+      'NEVER build the project. Do not run npm run build, expo prebuild, pod install, xcodebuild,',
+      'gradlew, react-native run-ios/run-android, or start Metro. Give the developer the exact',
+      'command and let them run it. Running tests is NOT a build and is still expected.',
+      '',
+      'At session start, right after invoke_mobile_team and get_setup_status, call check_branch_sync:',
+      '  in sync          -> say so, then continue',
+      '  behind/diverged  -> tell the developer to run git pull BEFORE any changes; make no edits',
+      '  no upstream      -> say so, then continue',
+      'Never run git pull, git merge, or git rebase yourself.',
+      '',
+      '## Requirement Gate (run before EVERY request)',
+      'Check existing context first -- conversation, project files, ticket, saved memory, config.',
+      'Never ask for anything already available. Never re-read or re-search what you already have.',
+      '',
+      'Never silently assume file names, API endpoints or payloads, business rules, UI behaviour,',
+      'error handling, default values, user flows, auth behaviour, dependencies, data models,',
+      'supported OS versions, or naming conventions. Read them from the code, or ask.',
+      '',
+      'Classify what is missing, then act:',
+      '  CRITICAL  -- cannot implement correctly without it -> stop and ask',
+      '  IMPORTANT -- changes the result but has a safe default -> ask only if a wrong guess causes rework',
+      '  OPTIONAL  -- never blocks',
+      '',
+      '  READY             -> implement now, ask nothing',
+      '  PARTIALLY READY   -> implement now, state each assumption in one line',
+      '  NEED CLARIFICATION-> ask first, one grouped message, critical questions first',
+      '',
+      'Do not over-question: a clear request with the needed context executes immediately.',
+      'Narrow before reading: feature -> files -> functions. Use narrow_code_scope instead of',
+      'scanning the repo. Change only what was asked -- no unrelated refactoring.',
+      '',
+      'Tools: analyze_request | narrow_code_scope | prompt_template',
+      '',
       '## Change Safety Protocol (MANDATORY)',
       'Before every file edit, state the risk level inline then proceed immediately:',
       '  Risk: LOW / MEDIUM / HIGH -- <one sentence reason>',
@@ -285,18 +319,117 @@ try {
   warn('You can add it manually — see CLAUDE.md Change Safety Protocol section.');
 }
 
-console.log('');
-console.log(`${GREEN}============================================${NC}`);
-console.log(`${GREEN}  Setup Complete!${NC}`);
-console.log(`${GREEN}============================================${NC}`);
-console.log('');
-console.log('  How to use:');
-console.log('    1. Open any terminal directory');
-console.log('    2. Run: claude');
-console.log('    3. Say: "invoke mobile-team-agent"');
-console.log('    4. Or say: "Good morning" for daily standup');
-console.log('');
-console.log('  First-time:');
-console.log('    - "configure jira" — connect your Jira instance');
-console.log('    - "configure figma" — connect Figma (optional)');
-console.log('');
+// Install slash commands to ~/.claude/commands/
+info('Installing slash commands to ~/.claude/commands/...');
+const commandsSource = path.join(packageDir, 'commands');
+const globalCommandsDir = path.join(globalClaudeDir, 'commands');
+
+try {
+  fs.mkdirSync(globalCommandsDir, { recursive: true });
+  let installed = 0;
+  let skipped = 0;
+
+  if (fs.existsSync(commandsSource)) {
+    const commandFiles = fs.readdirSync(commandsSource).filter(f => f.endsWith('.md'));
+    for (const file of commandFiles) {
+      const dest = path.join(globalCommandsDir, file);
+      // Always overwrite agent-managed commands to keep them in sync
+      fs.copyFileSync(path.join(commandsSource, file), dest);
+      installed++;
+    }
+    success(`${installed} slash command(s) installed to ${globalCommandsDir}`);
+    // List the new mta: prefixed commands so the user knows about them
+    const newCommands = commandFiles.filter(f => f.startsWith('mta:'));
+    if (newCommands.length) {
+      info('New commands (use with /project: prefix in Claude CLI):');
+      for (const cmd of newCommands) {
+        const name = cmd.replace('.md', '');
+        console.log(`    /${name}`);
+      }
+    }
+  } else {
+    warn('commands/ folder not found in package — slash commands not installed.');
+  }
+} catch (err) {
+  warn(`Could not install slash commands: ${err.message}`);
+}
+
+// ── User identity + team tracking setup ─────────────────────────────────
+// Always writes the team webhook to config.json (safe to overwrite on update).
+// Only prompts for display_name if not already set — skips on updates.
+
+const readline = require('readline');
+const agentDir = path.join(os.homedir(), '.mobile-team-agent');
+const prefsFile = path.join(agentDir, 'preferences.json');
+const configFile = path.join(agentDir, 'config.json');
+
+fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+
+// Always write the team webhook — safe on both fresh install and update
+try {
+  let cfg = {};
+  if (fs.existsSync(configFile)) {
+    try { cfg = JSON.parse(fs.readFileSync(configFile, 'utf8')); } catch (_) {}
+  }
+  if (!cfg.tracking) cfg.tracking = {};
+  cfg.tracking.webhook_url = 'https://chat.googleapis.com/v1/spaces/AAQAFRquAD0/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=1tte540KDT5IG9abZT5J_NT6Ns7EQsrCBgwr7oLFdtE';
+  fs.writeFileSync(configFile, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  success('Team tracking configured.');
+} catch (err) {
+  warn(`Could not write tracking config: ${err.message}`);
+}
+
+// Check if display_name already set (i.e. this is an update, not a fresh install)
+let existingPrefs = {};
+if (fs.existsSync(prefsFile)) {
+  try { existingPrefs = JSON.parse(fs.readFileSync(prefsFile, 'utf8')); } catch (_) {}
+}
+
+function finalize() {
+  console.log('');
+  console.log(`${GREEN}============================================${NC}`);
+  console.log(`${GREEN}  Setup Complete!${NC}`);
+  console.log(`${GREEN}============================================${NC}`);
+  console.log('');
+  console.log('  How to use:');
+  console.log('    1. Open any terminal directory');
+  console.log('    2. Run: claude');
+  console.log('    3. Say: "invoke mobile-team-agent"');
+  console.log('    4. Or say: "Good morning" for daily standup');
+  console.log('');
+  console.log('  First-time:');
+  console.log('    - "configure jira" — connect your Jira instance');
+  console.log('    - "configure figma" — connect Figma (optional)');
+  console.log('');
+}
+
+if (existingPrefs.display_name) {
+  // Existing user — skip name prompt, just confirm tracking is active
+  success(`Identity already set: ${existingPrefs.display_name}`);
+  finalize();
+} else {
+  // Fresh install — ask for name
+  console.log('');
+  info('Setting up your identity for team usage tracking...');
+  console.log(`  ${CYAN}Agent usage is logged to your team's Google Chat.${NC}`);
+  console.log(`  ${CYAN}Your name will appear next to each tool event.${NC}`);
+  console.log('');
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  rl.question('  Enter your full name (e.g. John Smith): ', (name) => {
+    rl.close();
+    const displayName = (name || '').trim();
+    if (displayName) {
+      try {
+        existingPrefs.display_name = displayName;
+        fs.writeFileSync(prefsFile, JSON.stringify(existingPrefs, null, 2), { mode: 0o600 });
+        success(`Identity saved: ${displayName}`);
+      } catch (err) {
+        warn(`Could not save display name: ${err.message}`);
+      }
+    } else {
+      warn('No name entered — skipping. Run setup again or use set_preferences with display_name in the agent.');
+    }
+    finalize();
+  });
+}

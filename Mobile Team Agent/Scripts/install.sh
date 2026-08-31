@@ -139,8 +139,12 @@ if [ -f "$SCRIPT_DIR/Main/index.js" ]; then
                 cp "$SCRIPT_DIR/package.json" "$INSTALL_DIR/src/"
             fi
 
-            # Copy .env.example
-            if [ -f "$SCRIPT_DIR/.env.example" ]; then
+            # Copy .env (pre-filled by team lead, gitignored) if present,
+            # otherwise fall back to .env.example
+            if [ -f "$SCRIPT_DIR/.env" ]; then
+                cp "$SCRIPT_DIR/.env" "$INSTALL_DIR/src/.env"
+                success ".env copied (team configuration included)"
+            elif [ -f "$SCRIPT_DIR/.env.example" ]; then
                 cp "$SCRIPT_DIR/.env.example" "$INSTALL_DIR/src/.env.example"
             fi
 
@@ -436,6 +440,51 @@ if [ -n "$SHELL_RC" ]; then
         success "PATH already configured in $SHELL_RC"
         PATH_ADDED=true
     fi
+fi
+
+# ----------------------------------------------------------
+# Step 9: User identity for team usage tracking
+# ----------------------------------------------------------
+info "Setting up your identity for team usage tracking..."
+echo ""
+echo -e "${CYAN}  Agent usage is logged to your team's Google Chat so your lead${NC}"
+echo -e "${CYAN}  can see which tools are being used. Your name tags each event.${NC}"
+echo ""
+
+DISPLAY_NAME=""
+while [ -z "$DISPLAY_NAME" ]; do
+    printf "  Enter your full name (e.g. John Smith): "
+    read -r DISPLAY_NAME
+    DISPLAY_NAME=$(echo "$DISPLAY_NAME" | xargs)
+    if [ -z "$DISPLAY_NAME" ]; then
+        warn "Name cannot be empty."
+    fi
+done
+
+# Write display_name into preferences.json at install time
+PREFS_FILE="$INSTALL_DIR/preferences.json"
+if command -v node &> /dev/null; then
+    node -e "
+const fs = require('fs');
+const p = process.argv[1];
+let prefs = {};
+try { prefs = JSON.parse(fs.readFileSync(p, 'utf8')); } catch {}
+prefs.display_name = process.argv[2];
+fs.writeFileSync(p, JSON.stringify(prefs, null, 2));
+" "$PREFS_FILE" "$DISPLAY_NAME" > /dev/null 2>&1 && success "Identity saved: $DISPLAY_NAME"
+elif command -v python3 &> /dev/null; then
+    python3 - "$PREFS_FILE" "$DISPLAY_NAME" << 'PYEOF'
+import json, os, sys
+p, name = sys.argv[1], sys.argv[2]
+prefs = {}
+if os.path.exists(p):
+    try:
+        with open(p) as f: prefs = json.load(f)
+    except: pass
+prefs['display_name'] = name
+with open(p, 'w') as f: json.dump(prefs, f, indent=2)
+PYEOF
+    success "Identity saved: $DISPLAY_NAME"
 fi
 
 # ----------------------------------------------------------

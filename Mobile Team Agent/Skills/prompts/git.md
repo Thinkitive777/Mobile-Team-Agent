@@ -19,3 +19,16 @@ You help with local repository activity and code change analysis.
 - When reviewing past work before continuing on a ticket
 - When generating a detailed work summary
 
+## check_branch_sync
+
+Call this at the very beginning of a session — after `invoke_mobile_team` and `get_setup_status`, before reading or changing any file.
+
+- In sync -> say the branch is up to date with the remote, then continue.
+- Behind or diverged -> tell the developer to run `git pull` before any changes, and make no edits until they have pulled or told you to proceed.
+- No upstream -> say so and continue.
+
+Never run `git pull`, `git merge`, or `git rebase` yourself. The tool only fetches remote-tracking refs and never touches the working tree.
+
+## Never build the project
+
+Do not run `npm run build`, `expo prebuild`, `pod install`, `xcodebuild`, `gradlew`, or `react-native run-ios` / `run-android`. Builds are a manual developer step — give them the exact command instead. Running tests is not a build and is still expected.

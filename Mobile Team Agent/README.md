@@ -1,8 +1,8 @@
 # 🚀 Mobile Team Agent
 
-> **v3.4.10** — Context-aware, memory-driven developer assistant with Jira + Git integration, smart ticket guidance, persistent preferences, intelligent workflow automation, Figma design-to-code, React Native project setup, deep code review, unit test generation, and session memory across days.
+> **v4.0.0** — Context-aware, memory-driven developer assistant with Jira + Git integration, smart ticket guidance, persistent preferences, intelligent workflow automation, Figma design-to-code, React Native project setup, deep code review, pre-PR merge prediction with risk scoring, unit test generation, prompt validation, context engineering, and session memory across days.
 
-The **Mobile Team Agent** is an MCP (Model Context Protocol) server that plugs into **Claude CLI**. It gives Claude a full suite of tools for mobile developers — Jira ticketing, Git insights, Figma design reading, RN project scaffolding, code review, unit test generation, and persistent memory — all accessible via natural language.
+The **Mobile Team Agent** is an MCP (Model Context Protocol) server that plugs into **Claude CLI**. It gives Claude a full suite of tools for mobile developers — Jira ticketing, Git insights, Figma design reading, RN project scaffolding, code review, pre-PR merge analysis, unit test generation, AI efficiency gating, and persistent memory — all accessible via natural language.
 
 ---
 
@@ -98,6 +98,29 @@ Git is auto-detected from the current directory — no setup needed.
 
 ## 🗂 All Tools by Category
 
+### 🎯 AI Efficiency & Prompt Validation
+> *by Shekhar Manwar*
+
+Runs before every other skill — it decides whether the agent has enough information to implement correctly, and keeps it from reading half the repo to find out.
+
+| Tool | What it does | Say |
+|------|-------------|-----|
+| `analyze_request` | Validate a request before implementing: goal, scope, inputs, expected output, constraints, edge cases. Classifies missing info as CRITICAL / IMPORTANT / OPTIONAL and returns a READY / PARTIALLY READY / NEED CLARIFICATION verdict | `"check my prompt"` / `"is this enough information?"` / `/analyze <request>` |
+| `narrow_code_scope` | Find the smallest relevant set of files for a feature or symbol, ranked, with the matched lines — so only those files get opened | `"where is end_of_day_report implemented"` / `/narrow biometric login` |
+| `prompt_template` | The standard prompt structure (goal, context, scope, requirements, constraints, inputs, expected output, validation) | `"give me a prompt template"` / `/prompt add offline caching` |
+
+**The gate the agent applies to every request:**
+
+1. **Reuse context first** — conversation → project files → ticket → saved memory → config. Never asks for what it already has.
+2. **Never assume** file names, API contracts, business rules, error handling, defaults, auth behaviour, data models, or supported versions.
+3. **Classify the gap** — CRITICAL (stop and ask) / IMPORTANT (ask only if a wrong guess causes rework) / OPTIONAL (never blocks).
+4. **Decide** — READY → implement; PARTIALLY READY → implement and state assumptions; NEED CLARIFICATION → one grouped question set, critical first.
+5. **Narrow before reading** — feature → files → functions; change only what was asked.
+
+Clear requests still run immediately — `"fix this function"` with the function attached is never turned into a questionnaire.
+
+---
+
 ### 🔧 Setup & Connection
 
 | Tool | What it does | Say |
@@ -148,6 +171,7 @@ Git is auto-detected from the current directory — no setup needed.
 | Tool | What it does | Say |
 |------|-------------|-----|
 | `get_recent_commits` | Git log with Jira linking, file diff stats, work area analysis | `"show my recent commits"` / `"what did I commit today?"` |
+| `check_branch_sync` | Check the local branch against its remote before work starts — fetches refs (read-only), reports ahead/behind, and says when a `git pull` is needed. Never pulls *(by Shekhar Manwar)* | `"am I up to date?"` / `"is my branch synced?"` |
 | `get_commit_details` | Full commit deep-dive: patch, files changed, lines +/-, Jira tickets | `"show changes in commit abc1234"` |
 
 ---
@@ -296,6 +320,63 @@ When you say `"invoke mobile-team-agent"` or `"good morning"` next day, this sna
 
 ---
 
+### 🚀 Pre-PR Check — Merge Prediction & Risk Scoring
+> *by Devashish Kukade*
+
+Run `pre_pr_check` before raising a pull request or to review an existing PR. It is **entirely read-only** — the working tree is never touched.
+
+| Tool | What it does | Say |
+|------|-------------|-----|
+| `pre_pr_check` | Predict merge outcome, score risk 0–100, map feature impact, list conflicts | `"pre pr check into dev"` / `"check before I raise a PR"` / `/pre-pr dev` |
+| `pre_pr_check` (PR mode) | Same checks on an existing PR — pass the link | `"review this PR: https://github.com/org/repo/pull/42"` / `/review-pr <link>` |
+
+The tool reports four sections in priority order:
+
+#### 1. Mergeable
+Will the branch merge cleanly into the target? Uses `git merge-tree --write-tree` (requires git ≥ 2.38) to predict the merge in memory without touching any files.
+
+#### 2. Risk Score — LOW / MEDIUM / HIGH (0–100)
+A deterministic score where every point is explained. Nine weighted drivers, each capped so no single signal overwhelms:
+
+| Driver | Points | Cap | What it catches |
+|--------|--------|-----|-----------------|
+| **Native code** | 25 | 25 | iOS/Android build inputs (Podfile, .gradle, Info.plist, AndroidManifest) — forces a clean rebuild |
+| **Shared fan-in** | 2/dep | 20 | Shared files imported by 5+ other files — a one-line change that breaks six screens |
+| **Dependency bumps** | 12/major | 25 | Major version bumps in package.json — APIs break by definition |
+| **Test gap** | 3/file | 18 | Changed source files with no matching test file (disabled if project has < 3 test files) |
+| **Migration/config** | 15 | 15 | Schema migrations, CI workflows, .env files, app config, build config |
+| **Merge conflicts** | 2/file | 15 | Files that will not auto-merge |
+| **Staleness** | 1/10 commits | 10 | How far behind the target branch this branch has drifted |
+| **Fragile paths** | 5/file | 10 | Files that have been reverted or hot-fixed in recent history |
+| **Churn** | 1/150 lines | 10 | Total lines changed (generated/lockfiles excluded) |
+
+| Score | Band |
+|-------|------|
+| 0–29 | LOW |
+| 30–59 | MEDIUM |
+| 60–100 | HIGH |
+
+Each driver includes evidence (file paths, importer counts, version bumps) and actionable mitigations.
+
+#### 3. Features Impacted
+Maps changed files to the project's feature structure (auto-detected from `src/domain`, `src/features`, `src/modules`, or `src/screens`):
+
+- **Direct** — changed file lives inside a feature folder
+- **Indirect** — changed file is shared code (services, redux, navigation); its importers are traced one hop to find which features are affected
+- **App-wide** — shared code imported by 50+ files (reported separately)
+
+Uses a reverse-import index built from the project's source files, honouring tsconfig path aliases.
+
+#### 4. Conflicts
+Exact list of files that will not auto-merge — fix these on your branch before opening the PR.
+
+**Requirements:**
+- Git ≥ 2.38 (for `git merge-tree --write-tree`)
+- Not a shallow clone (merge-base would be wrong — run `git fetch --unshallow` first)
+- `gh` CLI installed and authenticated (only for PR-mode via URL)
+
+---
+
 ### 🧪 Unit Tests
 
 | Tool | What it does | Say |
@@ -323,6 +404,23 @@ When you say `"invoke mobile-team-agent"` or `"good morning"` next day, this sna
 | 80–99% | 🟡 Partial |
 | 50–79% | 🟠 Low |
 | < 50% | 🔴 CRITICAL — generate tests |
+
+---
+
+## 🔧 Build & Branch Sync Rules
+> *by Shekhar Manwar*
+
+**The agent never builds your project.** No `npm run build`, `expo prebuild`, `pod install`, `xcodebuild`, `gradlew`, or `run-ios`/`run-android` — when a build or native rebuild is needed it tells you and hands you the exact command. Running tests (`run_tests`, `generate_unit_tests`, `check_test_coverage`) is not a build and still happens automatically after development.
+
+**The agent checks remote sync before it starts.** At session start, right after activation, it runs `check_branch_sync`:
+
+| Result | What the agent does |
+|--------|--------------------|
+| In sync | Says the branch is up to date, then continues |
+| Behind / diverged | Tells you to run `git pull` first and makes no edits until you have |
+| No upstream | Says so and continues |
+
+It never runs `git pull`, `git merge`, or `git rebase` itself — only a read-only fetch of remote-tracking refs.
 
 ---
 
@@ -357,55 +455,106 @@ This protocol is enforced via `PreToolUse` and `PostToolUse` hooks installed int
 
 ---
 
-## 💬 Natural Language Examples
+## Slash Commands
+
+Slash commands are **auto-installed** to `~/.claude/commands/` when you run `npx mobile-team-agent setup`. New commands from v4.0.0 use the `mta:` prefix to avoid conflicts with user commands.
+
+**New in v4.0.0** (use `/mta:` prefix):
+
+| Command | What it does | Author |
+|---------|-------------|--------|
+| `/mta:pre-pr <branch>` | Run `pre_pr_check` — first word is the branch to merge INTO | Devashish Kukade |
+| `/mta:review-pr <link>` | Run `pre_pr_check` on an existing pull request URL | Devashish Kukade |
+| `/mta:analyze <request>` | Validate a vague request before implementing | Shekhar Manwar |
+| `/mta:narrow <feature>` | Find the smallest relevant set of files for a feature or symbol | Shekhar Manwar |
+| `/mta:prompt <task>` | Show the standard prompt template | Shekhar Manwar |
+
+**Existing commands** (no prefix change):
+
+| Command | What it does |
+|---------|-------------|
+| `/standup` | Morning standup |
+| `/eod` | End-of-day report |
+| `/plan` | Deep daily plan |
+| `/tickets` | List open tickets |
+| `/ticket <key>` | Select a ticket |
+| `/commits` | Recent git commits |
+| `/remember` / `/recall` | Memory save/search |
+| `/journal` | Work log entry |
+| `/decide` / `/decisions` | Track decisions |
+| `/suggest` | AI-scored ticket suggestions |
+| `/weekly` | Weekly summary |
+| `/workload` | Workload analysis |
+| `/health` | Integration health check |
+| `/status` | Setup status |
+| `/memory` | Memory usage stats |
+
+---
+
+## Context Engineering (Optional Add-on)
+> *by Aatif*
+
+The `context-engineering/` folder contains an advanced Claude Code workflow system for long-running sessions. It is self-contained and can be adopted independently.
+
+**What it provides:**
+- **Slash commands:** `/checkpoint`, `/context`, `/handoff`, `/resume-handoff`, `/unknowns`
+- **Hooks:** `git-guard.sh` (blocks destructive git ops), `pre-compact.sh`, `session-start.sh`, `statusline.js/sh` (live context usage %), `turn-context.js/sh`
+- **Skills:** `context-handoff` — structured save/resume of task state across sessions
+- **Docs:** 8-chapter guide (overview, getting started, commands, context engineering, git safety, model safety, reference, troubleshooting)
+
+**Install:**
+```bash
+cd context-engineering
+chmod +x install.sh && ./install.sh
+```
+
+**Key concepts:** Checkpoints (mid-task state save), Context Handoffs (persist across sessions), Unknowns tracking (unresolved decisions surfaced via `/unknowns`), Context budget bands (under 60% normal, 80%+ checkpoint recommended, 90%+ handoff strongly recommended), Git safety hooks.
+
+**Team rules** in `context-engineering/CLAUDE.md`: no assumptions (label certainty as Known/Found/Inferred/Unknown), understand before you change, follow existing patterns, verify (never fake certainty), keep context small.
+
+---
+
+## Natural Language Examples
 
 ```
 # Morning
-"Good morning"                            → morning standup + last session context
-"plan my day"                             → deep daily plan
+"Good morning"                            -> morning standup + last session context
+"plan my day"                             -> deep daily plan
 
 # Tickets
-"show my tickets"                         → list open tickets
-"show CMDN tickets"                       → project-specific tickets
-"PROJ-42"                                 → full details + implementation plan
-"what should I work on?"                 → AI-scored suggestions
-"move PROJ-42 to In Progress"            → transition status
-"log 3h on PROJ-42"                      → log work
+"show my tickets"                         -> list open tickets
+"PROJ-42"                                 -> full details + implementation plan
+"what should I work on?"                 -> AI-scored suggestions
+"move PROJ-42 to In Progress"            -> transition status
 
 # Git
-"show my recent commits"                 → git log with Jira links
-"what changed in commit abc1234"         → full patch details
+"show my recent commits"                 -> git log with Jira links
+"am I up to date?"                       -> check branch sync status
+
+# Pre-PR & Merge Safety
+"pre pr check into dev"                  -> merge prediction + risk score
+"review this PR: <github-link>"         -> review an existing PR by URL
+
+# AI Efficiency
+"check my prompt"                        -> analyze request completeness
+"where is end_of_day_report"            -> narrow code scope
 
 # Figma
-"show Figma screens"                     → list all frames
-"build the Login screen from Figma"     → read design + generate code
-"suggest next 5 screens to implement"   → unimplemented screen suggestions
-
-# React Native
-"set up a new RN project called TaskApp with navigation and auth"
-"review my project structure"
-"what should I use for state management?"
+"build the Login screen from Figma"     -> read design + generate code
 
 # Code Review
-"review my branch"                       → full review with risk score
-"will this break anything?"              → breaking change analysis
-"scan LoginScreen.tsx for RN issues"    → file-level issue scan
+"review my branch"                       -> full review with risk score
+"scan LoginScreen.tsx for RN issues"    -> file-level issue scan
 
 # Unit Tests
-"generate unit tests"                    → tests for all changed files, runs immediately
-"check test coverage"                    → full coverage report
-"run tests"                              → run the test suite
+"generate unit tests"                    -> tests for all changed files
 
 # Memory
 "remember: auth token stored in MMKV"
-"what did I note about auth?"
-"I just finished the login screen"       → journal entry
-"we decided to use Zustand"              → saved decision
-"what decisions are pending?"
+"we decided to use Zustand"              -> saved decision
 
 # End of day
-"end of day"                             → EOD report + session snapshot saved
-"weekly summary"                         → weekly rollup
+"end of day"                             -> EOD report + session snapshot saved
 ```
 
 ---
@@ -415,18 +564,19 @@ This protocol is enforced via `PreToolUse` and `PostToolUse` hooks installed int
 ```
 Mobile Team Agent/
 ├── Main/
-│   ├── index.js            # MCP server entry point
-│   └── SkillRegistry.js    # Tool registration
+│   ├── index.js              # MCP server entry point
+│   └── SkillRegistry.js      # Tool registration
 ├── Skills/
 │   ├── Core/BaseSkill.js
+│   ├── EfficiencySkill.js    # analyze_request, narrow_code_scope, prompt_template
 │   ├── SetupSkill.js         # invoke, get_setup_status, configure_service, health_check
 │   ├── JiraReadSkill.js      # list_tickets, get_ticket_details, analyze_workload, ...
 │   ├── JiraWriteSkill.js     # transition_ticket, add_comment, create_ticket, ...
-│   ├── GitSkill.js           # get_recent_commits, get_commit_details
+│   ├── GitSkill.js           # get_recent_commits, get_commit_details, check_branch_sync
 │   ├── WorkflowSkill.js      # morning_standup, plan_my_day, end_of_day_report, ...
 │   ├── FigmaSkill.js         # configure_figma, list_figma_screens, read_figma_screen, ...
 │   ├── MemorySkill.js        # remember, recall, journal, add_decision, ...
-│   ├── CodeReviewSkill.js    # review_branch, detect_rn_issues, compare_with_branch, ...
+│   ├── CodeReviewSkill.js    # review_branch, detect_rn_issues, pre_pr_check, ...
 │   ├── RNProjectSkill.js     # setup_rn_project, analyze_rn_architecture, recommend_libraries
 │   ├── UnitTestSkill.js      # generate_unit_tests, check_test_coverage, run_tests
 │   └── prompts/              # Markdown prompt templates per skill
@@ -437,15 +587,41 @@ Mobile Team Agent/
 │   ├── memory-manager.js     # includes session snapshot save/load
 │   ├── report-manager.js
 │   └── offline-queue.js
-├── Constants/constants.js
+├── Constants/constants.js    # version, risk weights, risk bands, timeouts
 ├── Utils/
-│   ├── git-utils.js
+│   ├── git-utils.js          # commit analysis + pre-PR merge plumbing + branch sync
+│   ├── feature-map.js        # reverse-import index, feature impact analysis
+│   ├── gh-utils.js           # GitHub CLI (gh) wrapper for PR metadata
+│   ├── risk-model.js         # deterministic risk scoring (pure, no I/O)
 │   ├── ticket-utils.js
 │   └── validators.js
+├── commands/                  # Slash commands (installed to ~/.claude/commands/ by setup)
+│   ├── standup.md, eod.md, plan.md, tickets.md, ...  # existing
+│   ├── mta:pre-pr.md         # /mta:pre-pr — pre-PR merge check
+│   ├── mta:review-pr.md      # /mta:review-pr — review existing PR
+│   ├── mta:analyze.md        # /mta:analyze — request validation
+│   ├── mta:narrow.md         # /mta:narrow — code scope narrowing
+│   └── mta:prompt.md         # /mta:prompt — prompt template
 ├── setup.js                  # npx mobile-team-agent setup entry point
 ├── install.sh                # Clone-based installer
 ├── package.json
 └── CLAUDE.md                 # Agent instructions for Claude
+
+.claude/commands/
+├── pre-pr.md                 # /pre-pr slash command
+├── review-pr.md              # /review-pr slash command
+├── analyze.md                # /analyze slash command
+├── narrow.md                 # /narrow slash command
+└── prompt.md                 # /prompt slash command
+
+context-engineering/           # Optional add-on (see Context Engineering section)
+├── .claude/commands/          # /checkpoint, /context, /handoff, /resume-handoff, /unknowns
+├── .claude/hooks/             # git-guard, pre-compact, session-start, statusline, turn-context
+├── .claude/skills/            # context-handoff skill
+├── docs/guide/                # 8-chapter documentation
+├── install.sh                 # Self-contained installer
+├── CLAUDE.md                  # Team engineering rules
+└── README.md
 ```
 
 ---

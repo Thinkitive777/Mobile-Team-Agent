@@ -45,8 +45,11 @@ const LegacySkill = require("../Skills/LegacySkill");
 const RNProjectSkill = require("../Skills/RNProjectSkill");
 const CodeReviewSkill = require("../Skills/CodeReviewSkill");
 const UnitTestSkill = require("../Skills/UnitTestSkill");
+const EfficiencySkill = require("../Skills/EfficiencySkill");
 
 const registry = new SkillRegistry();
+// Registered first: its prompt chunk is the cross-cutting gate that runs before every other skill.
+registry.register(new EfficiencySkill());
 registry.register(new SetupSkill());
 registry.register(new JiraReadSkill());
 registry.register(new JiraWriteSkill());

@@ -6,7 +6,7 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 
 const {
-  GIT_DEFAULT_SINCE, GIT_MAX_BUFFER,
+  GIT_DEFAULT_SINCE, GIT_MAX_BUFFER, GIT_FETCH_TIMEOUT_MS,
   GIT_SHORT_HASH_LENGTH, GIT_LOG_FORMAT, TICKET_ID_PATTERN,
   DIFF_MAX_COMMITS, DIFF_MAX_LINES_PER_COMMIT, DIFF_SUMMARY_MAX_FILES,
 } = require('../Constants/constants');
@@ -14,6 +14,10 @@ const { GitError } = require('./errors');
 const Logger = require('./logger');
 
 const execFileAsync = promisify(execFile);
+
+// `git merge-tree --write-tree` — the read-only merge used for conflict
+// prediction — landed in git 2.38. Below that the pre-PR check is refused.
+const MERGE_TREE_MIN_GIT = [2, 38];
 
 class GitUtils {
   /**
@@ -252,6 +256,333 @@ class GitUtils {
     };
   }
 
+  // ── Pre-PR analysis: read-only branch & merge plumbing ────────────────
+  //
+  // Every method below is strictly read-only with respect to the working
+  // tree. Only `rev-parse`, `merge-tree`, `diff`, `log`, `rev-list`,
+  // `for-each-ref`, `merge-base` and `fetch` are used. `fetch` writes to
+  // .git but never touches tracked files or uncommitted work.
+
+  /**
+   * Runs a git command without throwing on a non-zero exit.
+   * Callers that care about failure inspect `code` themselves — merge-tree
+   * uses exit 1 to mean "conflicts", which is a result, not an error.
+   * @returns {Promise<{stdout: string, stderr: string, code: number}>}
+   */
+  static async _git(args, repoPath = process.cwd()) {
+    try {
+      const { stdout, stderr } = await execFileAsync(
+        'git', ['-C', repoPath, ...args], { maxBuffer: GIT_MAX_BUFFER }
+      );
+      return { stdout: stdout || '', stderr: stderr || '', code: 0 };
+    } catch (error) {
+      return {
+        stdout: error.stdout || '',
+        stderr: error.stderr || error.message || '',
+        code: typeof error.code === 'number' ? error.code : 1,
+      };
+    }
+  }
+
+  /**
+   * Verifies the repo can support a merge analysis before anything else runs.
+   * A shallow clone makes merge-base silently wrong rather than failing, so
+   * it is rejected outright instead of producing a confidently bad answer.
+   * @returns {Promise<{ok: boolean, reason: string|null, shallow: boolean, gitVersion: string}>}
+   */
+  static async preflight(repoPath = process.cwd()) {
+    const version = await this._git(['--version'], repoPath);
+    const raw = (version.stdout.match(/\d+\.\d+(\.\d+)?/) || [''])[0];
+    const [major, minor] = raw.split('.').map(Number);
+    const fail = (reason) => ({ ok: false, reason, shallow: false, gitVersion: raw });
+
+    if (version.code !== 0) return fail('git is not installed or not on PATH.');
+
+    if (major < MERGE_TREE_MIN_GIT[0] ||
+       (major === MERGE_TREE_MIN_GIT[0] && minor < MERGE_TREE_MIN_GIT[1])) {
+      return fail(
+        `git ${raw} is too old — merge analysis needs ${MERGE_TREE_MIN_GIT.join('.')} or newer ` +
+        `(\`git merge-tree --write-tree\`). Upgrade git and retry.`
+      );
+    }
+
+    const inRepo = await this._git(['rev-parse', '--is-inside-work-tree'], repoPath);
+    if (inRepo.code !== 0 || inRepo.stdout.trim() !== 'true') {
+      return fail(`Not a git repository: ${repoPath}`);
+    }
+
+    const shallow = await this._git(['rev-parse', '--is-shallow-repository'], repoPath);
+    if (shallow.stdout.trim() === 'true') {
+      return fail(
+        'This is a shallow clone. Merge-base results would be wrong, so the check is ' +
+        'refused rather than guessed. Run `git fetch --unshallow` first.'
+      );
+    }
+
+    return { ok: true, reason: null, shallow: false, gitVersion: raw };
+  }
+
+  /**
+   * Name of the branch currently checked out, or null on a detached HEAD.
+   */
+  static async currentBranch(repoPath = process.cwd()) {
+    const res = await this._git(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath);
+    const name = res.stdout.trim();
+    return (res.code === 0 && name && name !== 'HEAD') ? name : null;
+  }
+
+  /**
+   * Resolves a user-supplied branch name to something git can actually use,
+   * falling back to the remote-tracking copy when only that exists.
+   * @returns {Promise<{ref: string, via: string}|null>} null when unresolvable.
+   */
+  static async resolveRef(ref, repoPath = process.cwd(), remote = 'origin') {
+    if (!ref) return null;
+    const candidates = [
+      { ref, via: 'local branch' },
+      { ref: `${remote}/${ref}`, via: `remote branch (${remote})` },
+    ];
+    for (const candidate of candidates) {
+      const res = await this._git(
+        ['rev-parse', '--verify', '--quiet', `${candidate.ref}^{commit}`], repoPath
+      );
+      if (res.code === 0 && res.stdout.trim()) return candidate;
+    }
+    return null;
+  }
+
+  /**
+   * Updates remote-tracking refs so comparisons are not made against a stale
+   * local copy of the target branch. Never touches the working tree.
+   * Failure is non-fatal — offline should degrade, not abort.
+   */
+  static async fetchRemote(repoPath = process.cwd(), remote = 'origin') {
+    const res = await this._git(['fetch', '--quiet', '--prune', remote], repoPath);
+    if (res.code !== 0) {
+      Logger.debug('Git: fetch failed, continuing with local refs', {
+        reason: res.stderr.substring(0, 120),
+      });
+      return { ok: false, reason: res.stderr.trim().substring(0, 150) };
+    }
+    return { ok: true, reason: null };
+  }
+
+  /**
+   * Fetches a pull request's head commit into FETCH_HEAD so its code can be
+   * analysed locally. Works on private repos using the developer's existing
+   * git credentials — no API token involved.
+   */
+  static async fetchPullRequest(number, repoPath = process.cwd(), remote = 'origin') {
+    const localRef = `refs/mta/pr/${number}`;
+    const res = await this._git(
+      ['fetch', '--quiet', '--force', remote, `pull/${number}/head:${localRef}`], repoPath
+    );
+    if (res.code !== 0) {
+      return { ok: false, ref: null, reason: res.stderr.trim().substring(0, 200) };
+    }
+    return { ok: true, ref: localRef, reason: null };
+  }
+
+  /**
+   * Performs the merge entirely in the object database — nothing is checked
+   * out, staged or written to the working tree.
+   *
+   * Output format (verified against git 2.50):
+   *   line 0      tree OID
+   *   lines 1..n  conflicted paths (--name-only), terminated by a blank line
+   *   remainder   human-readable "Auto-merging" / "CONFLICT" detail
+   *
+   * Exit 0 = clean. Exit 1 means EITHER conflicts OR an unusable ref
+   * ("not something we can merge") — git does not distinguish them by code,
+   * so the tree OID is what separates the two: a real merge always writes
+   * one, a failed lookup never does. Keying off the exit code alone would
+   * report a nonexistent branch as a clean merge.
+   *
+   * @returns {Promise<{clean: boolean, conflicts: string[], tree: string|null,
+   *                    detail: string, error: string|null}>}
+   */
+  static async mergeTree(mergeInto, mergeFrom, repoPath = process.cwd()) {
+    const res = await this._git(
+      ['merge-tree', '--write-tree', '--name-only', mergeInto, mergeFrom], repoPath
+    );
+
+    const lines = res.stdout.split('\n');
+    const tree = (/^[0-9a-f]{7,64}$/.test((lines[0] || '').trim()))
+      ? lines[0].trim()
+      : null;
+
+    if (res.code !== 0 && !tree) {
+      return {
+        clean: false, conflicts: [], tree: null, detail: '',
+        error: res.stderr.trim().substring(0, 200) || 'merge-tree failed',
+      };
+    }
+    const conflicts = [];
+    let i = 1;
+    for (; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.trim() === '') break;
+      conflicts.push(line.trim());
+    }
+
+    return {
+      clean: res.code === 0,
+      conflicts,
+      tree,
+      detail: lines.slice(i + 1).join('\n').trim(),
+      error: null,
+    };
+  }
+
+  /**
+   * Files changed on `mergeFrom` since it diverged from `mergeInto`.
+   * Uses three-dot range so unrelated commits landing on the target branch
+   * are not misreported as this branch's work.
+   * @returns {Promise<Array<{status: string, path: string, oldPath: string|null}>>}
+   */
+  static async changedFiles(mergeInto, mergeFrom, repoPath = process.cwd()) {
+    const res = await this._git(
+      ['diff', '--name-status', '-M', `${mergeInto}...${mergeFrom}`], repoPath
+    );
+    if (res.code !== 0) return [];
+
+    return res.stdout.trim().split('\n').filter(Boolean).map(line => {
+      const parts = line.split('\t');
+      const status = (parts[0] || '').trim();
+      // Renames arrive as "R096\told/path\tnew/path"
+      if (status.startsWith('R') && parts.length >= 3) {
+        return { status: 'R', path: parts[2], oldPath: parts[1] };
+      }
+      return { status: status.charAt(0), path: parts[1] || '', oldPath: null };
+    }).filter(f => f.path);
+  }
+
+  /**
+   * Added/removed line counts per changed file, for churn scoring.
+   * Binary files report null counts rather than 0, so they can be excluded
+   * instead of silently counting as "no change".
+   * @returns {Promise<Array<{path: string, added: number|null, removed: number|null}>>}
+   */
+  static async diffNumstat(mergeInto, mergeFrom, repoPath = process.cwd()) {
+    const res = await this._git(
+      ['diff', '--numstat', '-M', `${mergeInto}...${mergeFrom}`], repoPath
+    );
+    if (res.code !== 0) return [];
+
+    return res.stdout.trim().split('\n').filter(Boolean).map(line => {
+      const [added, removed, ...rest] = line.split('\t');
+      const isBinary = added === '-' || removed === '-';
+      return {
+        path: (rest.join('\t') || '').trim(),
+        added: isBinary ? null : Number(added),
+        removed: isBinary ? null : Number(removed),
+      };
+    }).filter(f => f.path);
+  }
+
+  /**
+   * How far apart the two branches are.
+   * `behind` is what drives staleness risk — commits on the target that this
+   * branch has not absorbed yet.
+   * @returns {Promise<{ahead: number, behind: number}>}
+   */
+  static async aheadBehind(mergeInto, mergeFrom, repoPath = process.cwd()) {
+    const res = await this._git(
+      ['rev-list', '--left-right', '--count', `${mergeInto}...${mergeFrom}`], repoPath
+    );
+    if (res.code !== 0) return { ahead: 0, behind: 0 };
+    const [behind, ahead] = res.stdout.trim().split(/\s+/).map(Number);
+    return {
+      ahead: Number.isFinite(ahead) ? ahead : 0,
+      behind: Number.isFinite(behind) ? behind : 0,
+    };
+  }
+
+  /**
+   * Paths that have previously been reverted or hot-fixed — historically
+   * fragile ground. One `git log` pass over recent history rather than one
+   * call per changed file, which would be dozens of subprocesses.
+   * @returns {Promise<Set<string>>}
+   */
+  static async fragilePathSet(repoPath = process.cwd(), limit = 400) {
+    const res = await this._git([
+      'log', `-n${limit}`, '--format=%x00%s', '--name-only', '--no-merges',
+    ], repoPath);
+    if (res.code !== 0) return new Set();
+
+    const fragile = new Set();
+    let inFragileCommit = false;
+    for (const line of res.stdout.split('\n')) {
+      if (line.startsWith('\u0000')) {
+        inFragileCommit = /\b(revert|hotfix|hot-fix)\b/i.test(line.slice(1));
+        continue;
+      }
+      const filePath = line.trim();
+      if (inFragileCommit && filePath) fragile.add(filePath);
+    }
+    return fragile;
+  }
+
+  /**
+   * Parses `owner/repo` out of a remote URL, normalising SSH and HTTPS forms
+   * so a PR link can be matched against the checked-out repo.
+   * Handles: git@host:owner/repo.git, https://host/owner/repo.git,
+   *          ssh://git@host/owner/repo.git
+   * @returns {Promise<{host: string, owner: string, repo: string, slug: string}|null>}
+   */
+  static async remoteSlug(repoPath = process.cwd(), remote = 'origin') {
+    const res = await this._git(['remote', 'get-url', remote], repoPath);
+    if (res.code !== 0) return null;
+    return this.parseRemoteUrl(res.stdout.trim());
+  }
+
+  /**
+   * Pure URL parser — split out from remoteSlug so it can be unit-tested and
+   * reused on PR links pasted by the user.
+   */
+  static parseRemoteUrl(url) {
+    if (!url) return null;
+    const cleaned = url.trim().replace(/\.git$/, '');
+    const scp = cleaned.match(/^[\w.-]+@([\w.-]+):([^/]+)\/(.+)$/);
+    const uri = cleaned.match(/^(?:https?|ssh|git):\/\/(?:[^@/]+@)?([\w.-]+)(?::\d+)?\/([^/]+)\/(.+)$/);
+    const match = scp || uri;
+    if (!match) return null;
+
+    const [, host, owner, repo] = match;
+    const normalisedRepo = repo.replace(/\/+$/, '');
+    return {
+      host: host.toLowerCase(),
+      owner,
+      repo: normalisedRepo,
+      slug: `${owner}/${normalisedRepo}`.toLowerCase(),
+    };
+  }
+
+  /**
+   * Parses a pull request link into the repo it belongs to plus its number,
+   * so it can be checked against the checked-out repo before any work runs.
+   * Accepts the /pull/ and /pull-requests/ forms and tolerates trailing
+   * segments such as /files or #discussion_r123.
+   * @returns {{host: string, owner: string, repo: string, slug: string, number: number}|null}
+   */
+  static parsePullRequestUrl(url) {
+    if (!url) return null;
+    const match = String(url).trim().match(
+      /^(?:https?:\/\/)?([\w.-]+)\/([^/\s]+)\/([^/\s]+)\/(?:pull|pull-requests|merge_requests)\/(\d+)/i
+    );
+    if (!match) return null;
+
+    const [, host, owner, repo, number] = match;
+    const normalisedRepo = repo.replace(/\.git$/, '');
+    return {
+      host: host.toLowerCase(),
+      owner,
+      repo: normalisedRepo,
+      slug: `${owner}/${normalisedRepo}`.toLowerCase(),
+      number: Number(number),
+    };
+  }
+
   // ── Internal helpers ──────────────────────────────────────────────────
 
   static _parseCommitOutput(stdout) {
@@ -270,6 +601,59 @@ class GitUtils {
         ticketIds: this.extractTicketIds(message),
       };
     });
+  }
+
+  /**
+   * Compare the current branch against its upstream.
+   * Fetches the remote-tracking refs first (read-only — never touches the
+   * working tree) so ahead/behind counts are accurate.
+   */
+  static async getBranchSyncStatus(repoPath = process.cwd(), doFetch = true) {
+    const run = (args, opts = {}) =>
+      execFileAsync('git', ['-C', repoPath, ...args], { maxBuffer: GIT_MAX_BUFFER, ...opts });
+
+    let branch;
+    try {
+      branch = (await run(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+    } catch (error) {
+      return this._handleGitError(error, 'getBranchSyncStatus');
+    }
+
+    let dirty = false;
+    try {
+      dirty = (await run(['status', '--porcelain'])).stdout.trim().length > 0;
+    } catch (_) { /* non-fatal */ }
+
+    let upstream = null;
+    try {
+      upstream = (await run(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'])).stdout.trim();
+    } catch (_) {
+      return { branch, upstream: null, ahead: 0, behind: 0, dirty, fetched: false, fetchError: null };
+    }
+
+    let fetched = false;
+    let fetchError = null;
+    if (doFetch) {
+      try {
+        await run(['fetch', '--quiet', upstream.split('/')[0]], { timeout: GIT_FETCH_TIMEOUT_MS });
+        fetched = true;
+      } catch (error) {
+        fetchError = (error.message || 'fetch failed').substring(0, 120);
+        Logger.debug('Git fetch failed', { error: fetchError });
+      }
+    }
+
+    let ahead = 0;
+    let behind = 0;
+    try {
+      const counts = (await run(['rev-list', '--left-right', '--count', `${upstream}...HEAD`])).stdout.trim().split(/\s+/);
+      behind = parseInt(counts[0], 10) || 0;
+      ahead = parseInt(counts[1], 10) || 0;
+    } catch (error) {
+      return this._handleGitError(error, 'getBranchSyncStatus');
+    }
+
+    return { branch, upstream, ahead, behind, dirty, fetched, fetchError };
   }
 
   static _handleGitError(error, method) {

@@ -7,10 +7,18 @@ const { promisify } = require('util');
 const fs = require('fs');
 const path = require('path');
 const BaseSkill = require('./Core/BaseSkill');
+const GitUtils = require('../Utils/git-utils');
+const FeatureMap = require('../Utils/feature-map');
+const RiskModel = require('../Utils/risk-model');
+const GhUtils = require('../Utils/gh-utils');
 
 const execFileAsync = promisify(execFile);
 
 // ── RN-specific issue patterns ────────────────────────────────────────────
+
+/// Above this many importers, a shared file reaches so much of the app that
+/// naming individual features is noise — it is reported as app-wide instead.
+const APP_WIDE_FAN_IN = 50;
 
 const RN_ISSUE_PATTERNS = [
   // CRITICAL
@@ -383,6 +391,27 @@ class CodeReviewSkill extends BaseSkill {
           },
         },
       },
+      {
+        name: 'pre_pr_check',
+        description: 'Pre-PR check before raising a pull request, or a review of an existing PR. Reports, in priority order: (1) whether the branch will merge cleanly, (2) a deterministic LOW/MEDIUM/HIGH risk score with every point explained, (3) which app features the change impacts — directly and via shared code, (4) the exact files that will conflict. Entirely read-only: it predicts the merge in memory and never touches the working tree. Pass pr_url to run the same checks on an existing pull request.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            merge_into: {
+              type: 'string',
+              description: 'The branch you want to merge INTO (e.g. "dev", "main", "release/2.1"). Required unless pr_url is given.',
+            },
+            merge_from: {
+              type: 'string',
+              description: 'The branch being merged. Defaults to the branch currently checked out.',
+            },
+            pr_url: {
+              type: 'string',
+              description: 'Link to an existing pull request. The PR must belong to the repo you are in; its base and head branches are read from the PR itself.',
+            },
+          },
+        },
+      },
     ];
   }
 
@@ -391,6 +420,9 @@ class CodeReviewSkill extends BaseSkill {
     const repoPath = getRepoPath();
 
     switch (name) {
+
+      case 'pre_pr_check':
+        return this._prePrCheck(args, repoPath);
 
       case 'review_branch': {
         const target = args.target_branch || 'main';
@@ -985,12 +1017,275 @@ class CodeReviewSkill extends BaseSkill {
     return changes.upgraded.filter(u => u.includes('MAJOR BUMP'));
   }
 
+  // ── Pre-PR check ─────────────────────────────────────────────────────────
+
+  /**
+   * Resolves the two branches, predicts the merge, maps feature impact and
+   * scores risk. Every git call underneath is read-only.
+   */
+  async _prePrCheck(args, repoPath) {
+    const preflight = await GitUtils.preflight(repoPath);
+    if (!preflight.ok) return this.errorResponse(`Cannot run the pre-PR check.\n\n${preflight.reason}`);
+
+    let mergeInto = args.merge_into;
+    let mergeFrom = args.merge_from;
+    let pr = null;
+    const notes = [];
+
+    // ── PR mode: the PR itself names the two branches ──────────────────
+    if (args.pr_url) {
+      const link = GitUtils.parsePullRequestUrl(args.pr_url);
+      if (!link) {
+        return this.errorResponse(
+          `That does not look like a pull request link:\n  ${args.pr_url}\n\n` +
+          `Expected something like https://github.com/owner/repo/pull/123`
+        );
+      }
+
+      const origin = await GitUtils.remoteSlug(repoPath);
+      if (!origin) {
+        return this.errorResponse(
+          `This repository has no "origin" remote, so the PR cannot be matched to it.`
+        );
+      }
+      if (origin.slug !== link.slug) {
+        return this.errorResponse(
+          `This PR is not of this project, please recheck.\n\n` +
+          `  PR belongs to : ${link.slug}\n` +
+          `  You are in    : ${origin.slug}\n\n` +
+          `Open the repo the PR belongs to and run the check again.`
+        );
+      }
+
+      const gh = await GhUtils.status();
+      if (!gh.available) return this.errorResponse(gh.reason);
+
+      const view = await GhUtils.viewPullRequest(link.slug, link.number);
+      if (!view.ok) return this.errorResponse(view.reason);
+
+      pr = view.pr;
+      mergeInto = pr.baseRefName;
+      mergeFrom = pr.headRefName;
+
+      const fetched = await GitUtils.fetchPullRequest(link.number, repoPath);
+      if (fetched.ok) {
+        mergeFrom = fetched.ref;
+      } else {
+        notes.push(`Could not fetch the PR branch, comparing against the local copy of "${pr.headRefName}".`);
+      }
+    }
+
+    if (!mergeInto) {
+      return this.errorResponse(
+        `Which branch do you want to merge into?\n\n` +
+        `Example: pre_pr_check with merge_into "dev"\n` +
+        `Or pass pr_url to check an existing pull request.`
+      );
+    }
+
+    // ── Branch mode: resolve both ends ─────────────────────────────────
+    await GitUtils.fetchRemote(repoPath);
+
+    const into = await GitUtils.resolveRef(mergeInto, repoPath);
+    if (!into) {
+      return this.errorResponse(
+        `Branch "${mergeInto}" does not exist locally or on origin. Check the name and retry.`
+      );
+    }
+
+    let from = mergeFrom ? await GitUtils.resolveRef(mergeFrom, repoPath) : null;
+    let fromVia = 'given explicitly';
+    if (!from) {
+      if (mergeFrom) notes.push(`Branch "${mergeFrom}" was not found — using the current branch instead.`);
+      const current = await GitUtils.currentBranch(repoPath);
+      if (!current) {
+        return this.errorResponse(
+          `HEAD is detached and no branch was given, so there is nothing to compare. ` +
+          `Check out a branch or pass merge_from.`
+        );
+      }
+      from = { ref: current, via: 'current branch' };
+      fromVia = 'current branch';
+    }
+
+    // Comparing a branch with itself always reports a clean merge. When a
+    // mistyped name falls back to the current branch and that IS the target,
+    // the result would be a false all-clear — refuse instead.
+    if (from.ref === into.ref) {
+      return this.errorResponse(
+        `"${from.ref}" cannot be merged into itself.\n\n` +
+        (mergeFrom && mergeFrom !== from.ref
+          ? `Branch "${mergeFrom}" was not found, so the current branch was used.\n`
+          : '') +
+        `Check the branch names and retry.`
+      );
+    }
+
+    // ── 1. Will it merge? ──────────────────────────────────────────────
+    const merge = await GitUtils.mergeTree(into.ref, from.ref, repoPath);
+    if (merge.error) return this.errorResponse(`Merge analysis failed: ${merge.error}`);
+
+    const changed = await GitUtils.changedFiles(into.ref, from.ref, repoPath);
+    const changedPaths = changed.map(file => file.path);
+    const { ahead, behind } = await GitUtils.aheadBehind(into.ref, from.ref, repoPath);
+
+    // ── 3. Which features does it touch? ───────────────────────────────
+    const impact = FeatureMap.analyzeImpact(repoPath, changedPaths);
+
+    // ── 2. How risky is it? ────────────────────────────────────────────
+    const numstat = await GitUtils.diffNumstat(into.ref, from.ref, repoPath);
+    const churnLines = numstat
+      .filter(file => !RiskModel.isGenerated(file.path))
+      .reduce((sum, file) => sum + (file.added || 0) + (file.removed || 0), 0);
+
+    const coverage = FeatureMap.analyzeTestCoverage(repoPath, changedPaths);
+    const fragileSet = await GitUtils.fragilePathSet(repoPath);
+    const packageDiff = changedPaths.some(p => /(^|\/)package\.json$/.test(p))
+      ? await this._diffText(into.ref, from.ref, 'package.json', repoPath)
+      : '';
+
+    const risk = RiskModel.computeRisk({
+      changedFiles: changed,
+      conflicts: merge.conflicts,
+      behind,
+      fanIn: impact.fanIn,
+      majorBumps: this._majorBumpsFromDiff(packageDiff),
+      lockfileChanged: changedPaths.some(p => RiskModel.isLockfile(p)),
+      repoHasTests: coverage.repoHasTests,
+      testFileCount: coverage.testFileCount,
+      untestedFiles: coverage.untested,
+      fragilePaths: changedPaths.filter(p => fragileSet.has(p)),
+      churnLines,
+    });
+
+    return this.textResponse(this._renderPrePr({
+      into, from, fromVia, pr, notes, merge, risk, impact,
+      changedCount: changedPaths.length, ahead, behind, coverage,
+    }));
+  }
+
+  /**
+   * Renders the report. Sections are ordered by what a developer needs first:
+   * can it merge, how risky is it, what does it touch, what will conflict.
+   */
+  _renderPrePr(data) {
+    const { into, from, fromVia, pr, notes, merge, risk, impact } = data;
+    const line = '='.repeat(64);
+    let out = '';
+
+    if (pr) {
+      out += `PR Review — #${pr.number} ${pr.title}\n`;
+      out += `by ${pr.author?.login || 'unknown'}`;
+      out += pr.isDraft ? '  ·  DRAFT\n' : `  ·  ${pr.state}\n`;
+      out += `${pr.headRefName} -> ${pr.baseRefName}\n`;
+    } else {
+      out += `Pre-PR Check — ${from.ref} -> ${into.ref}\n`;
+      out += `merge_from: ${fromVia}   ·   merge_into: ${into.via}\n`;
+    }
+    out += `${line}\n\n`;
+
+    for (const note of notes) out += `Note: ${note}\n`;
+    if (notes.length) out += `\n`;
+
+    // 1 ── Mergeable
+    out += `1. MERGEABLE\n`;
+    out += merge.clean
+      ? `   Yes — merges cleanly into ${into.ref}.\n\n`
+      : `   No — ${merge.conflicts.length} file(s) will conflict. Listed in section 4.\n\n`;
+
+    // 2 ── Risk
+    out += `2. RISK — ${risk.band} (${risk.score}/100)\n`;
+    if (!risk.drivers.length) {
+      out += `   No risk drivers fired.\n`;
+    } else {
+      for (const driver of risk.drivers) {
+        out += `   +${String(driver.points).padStart(2)}  ${driver.label}\n`;
+        for (const item of driver.evidence) out += `        ${item}\n`;
+      }
+    }
+    for (const skip of risk.skipped) out += `    --  ${skip.reason}\n`;
+    if (risk.mitigations.length) {
+      out += `\n   To lower it:\n`;
+      for (const step of risk.mitigations) out += `     - ${step}\n`;
+    }
+    out += `\n`;
+
+    // 3 ── Features impacted
+    out += `3. FEATURES IMPACTED\n`;
+    if (!impact.featureRoot) {
+      out += `   No feature folder convention found in this project, so features\n`;
+      out += `   cannot be named. Looked for: src/domain, src/features, src/modules, src/screens.\n`;
+    } else {
+      out += `   [detected feature root: ${impact.featureRoot}]\n`;
+      out += `   Direct   : ${impact.direct.length
+        ? impact.direct.map(entry => `${entry.feature} (${entry.files.length} files)`).join(', ')
+        : 'none'}\n`;
+      out += `   Indirect : ${impact.indirect.length
+        ? impact.indirect.map(entry => entry.feature).join(', ')
+        : 'none'}\n`;
+
+      const appWide = Object.entries(impact.fanIn)
+        .filter(([, count]) => count >= APP_WIDE_FAN_IN)
+        .sort((a, b) => b[1] - a[1]);
+      if (appWide.length) {
+        out += `   App-wide : shared code that reaches every feature —\n`;
+        for (const [filePath, count] of appWide) {
+          out += `              ${filePath} (${count} importers)\n`;
+        }
+      }
+    }
+    out += `\n`;
+
+    // 4 ── Conflicts
+    out += `4. CONFLICTS\n`;
+    if (merge.clean) {
+      out += `   None.\n`;
+    } else {
+      for (const filePath of merge.conflicts) out += `   ${filePath}\n`;
+    }
+
+    out += `\n${line}\n`;
+    out += `${data.changedCount} files changed  ·  ${data.ahead} ahead / ${data.behind} behind ${into.ref}\n`;
+    if (impact.truncated) {
+      out += `Import scan hit its file limit — indirect impact may be incomplete.\n`;
+    }
+    return out;
+  }
+
+  /**
+   * Diff of a single file between two refs, used to read dependency changes
+   * without pulling the whole branch diff into memory.
+   */
+  async _diffText(mergeInto, mergeFrom, filePath, repoPath) {
+    const res = await GitUtils._git(
+      ['diff', `${mergeInto}...${mergeFrom}`, '--', filePath], repoPath
+    );
+    return res.code === 0 ? res.stdout : '';
+  }
+
+  /**
+   * Reuses the existing dependency parser and reshapes its strings into the
+   * structured form the risk model expects.
+   */
+  _majorBumpsFromDiff(diff) {
+    if (!diff) return [];
+    return this._detectMajorVersionBumps(diff).map(entry => {
+      const match = entry.match(/^(.+?):\s*(.+?)\s*→\s*(.+?)\s*\(MAJOR BUMP\)$/);
+      return match
+        ? { name: match[1], from: match[2], to: match[3] }
+        : { name: entry, from: '?', to: '?' };
+    });
+  }
+
   getPrompt() {
     return this.loadPromptChunk('code_review.md') || `### Code Review
 Use 'review_branch' when a developer wants to review their changes before raising a PR — compares against main by default.
 Use 'compare_with_branch' for a merge readiness report: native changes, dependency changes, config changes, and risk level.
 Use 'check_breaking_changes' to find what could break consumers when this branch merges.
 Use 'detect_rn_issues' to scan for React Native specific bugs, performance issues, and anti-patterns.
+Use 'pre_pr_check' when a developer is about to raise a PR and wants to know if it will merge — "pre pr test", "pre pr check", "check before I raise a PR", "am I ready to merge into dev". The first branch they name is the one they want to merge INTO (merge_into); a second branch, if given, is what they are merging (merge_from, default: current branch).
+Use 'pre_pr_check' with pr_url when the user pastes a pull request link and asks for a review.
+'pre_pr_check' reports four things in priority order: will it merge, risk band with every point explained, which features are impacted, and the exact conflicting files. Never reorder those sections and never add risk drivers the tool did not report.
 Always run 'review_branch' or 'compare_with_branch' when the user says "review my code", "check my PR", "is it safe to merge", "review before PR".`;
   }
 }

@@ -69,7 +69,7 @@ class SetupSkill extends BaseSkill {
       },
       {
         name: "set_preferences",
-        description: "Save user preferences (project, sprint, assignee, greeting name) for persistent memory across sessions.",
+        description: "Save user preferences (project, sprint, assignee, greeting name, display name) for persistent memory across sessions.",
         inputSchema: {
           type: "object",
           properties: {
@@ -78,6 +78,7 @@ class SetupSkill extends BaseSkill {
             board_id: { type: "number", description: "Default board ID" },
             assignee: { type: "string", description: "Default assignee" },
             greeting_name: { type: "string", description: "User's name for greetings" },
+            display_name: { type: "string", description: "User's full display name (used for team usage tracking)" },
           },
         },
       }
@@ -119,6 +120,12 @@ class SetupSkill extends BaseSkill {
           out += `Figma: connected${config.figma && config.figma.user ? ` as ${config.figma.user}` : ''}.\n`;
         } else {
           out += `Figma: not configured (optional). Use 'configure_figma' to enable design reading.\n`;
+        }
+
+        // Prompt for display_name if not yet set — needed for usage tracking
+        if (!preferences.display_name) {
+          out += `\nACTION REQUIRED: Please tell me your full name so I can identify you in team usage reports.\n`;
+          out += `Say: "My name is <Your Name>" or call set_preferences with display_name="<Your Name>"\n`;
         }
 
         // Scan ~/Documents/MobileTeamAgent/ for recent project reports to get back in context fast
@@ -449,6 +456,8 @@ class SetupSkill extends BaseSkill {
         if (args.assignee) { preferences.last_assignee = args.assignee; changes.push(`assignee: ${args.assignee}`); }
         if (args.greeting_name) { preferences.greeting_name = args.greeting_name; changes.push(`greeting name: ${args.greeting_name}`); }
 
+        if (args.display_name) { preferences.display_name = args.display_name; changes.push(`display name: ${args.display_name}`); }
+
         if (changes.length === 0) {
           let out = `Current Preferences:\n`;
           out += `  Project: ${preferences.last_project || 'not set'}\n`;
@@ -456,6 +465,7 @@ class SetupSkill extends BaseSkill {
           out += `  Board ID: ${preferences.last_board_id || 'not set'}\n`;
           out += `  Assignee: ${preferences.last_assignee || 'not set'}\n`;
           out += `  Greeting Name: ${preferences.greeting_name || 'not set'}\n`;
+          out += `  Display Name: ${preferences.display_name || 'not set'}\n`;
           return this.textResponse(out);
         }
 
