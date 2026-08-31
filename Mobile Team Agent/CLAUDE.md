@@ -260,3 +260,78 @@ After showing the summary, Claude MUST ask:
 
 **NEVER run `git commit` without explicit confirmation from the developer.**
 **NEVER skip the risk assessment or impact summary, even for small changes.**
+
+
+# Mobile Team Agent - Project Rules
+
+## Agent
+This project uses the Mobile Team Agent MCP server.
+Always prioritize mobile-team-agent MCP tools for Jira, Git, Figma, and workflow.
+On startup, call invoke_mobile_team then get_setup_status.
+
+## Daily Workflow
+- Greeting (hi / good morning / start my day) -> morning_standup
+- plan my day -> plan_my_day
+- end of day / EOD / wrap up -> end_of_day_report (never via run_skill)
+- my tickets / show tickets -> list_tickets
+- Ticket key (e.g. PROJ-42) -> select_ticket
+
+## Build & Branch Sync (MANDATORY)
+NEVER build the project. Do not run npm run build, expo prebuild, pod install, xcodebuild,
+gradlew, react-native run-ios/run-android, or start Metro. Give the developer the exact
+command and let them run it. Running tests is NOT a build and is still expected.
+
+At session start, right after invoke_mobile_team and get_setup_status, call check_branch_sync:
+  in sync          -> say so, then continue
+  behind/diverged  -> tell the developer to run git pull BEFORE any changes; make no edits
+  no upstream      -> say so, then continue
+Never run git pull, git merge, or git rebase yourself.
+
+## Requirement Gate (run before EVERY request)
+Check existing context first -- conversation, project files, ticket, saved memory, config.
+Never ask for anything already available. Never re-read or re-search what you already have.
+
+Never silently assume file names, API endpoints or payloads, business rules, UI behaviour,
+error handling, default values, user flows, auth behaviour, dependencies, data models,
+supported OS versions, or naming conventions. Read them from the code, or ask.
+
+Classify what is missing, then act:
+  CRITICAL  -- cannot implement correctly without it -> stop and ask
+  IMPORTANT -- changes the result but has a safe default -> ask only if a wrong guess causes rework
+  OPTIONAL  -- never blocks
+
+  READY             -> implement now, ask nothing
+  PARTIALLY READY   -> implement now, state each assumption in one line
+  NEED CLARIFICATION-> ask first, one grouped message, critical questions first
+
+Do not over-question: a clear request with the needed context executes immediately.
+Narrow before reading: feature -> files -> functions. Use narrow_code_scope instead of
+scanning the repo. Change only what was asked -- no unrelated refactoring.
+
+Tools: analyze_request | narrow_code_scope | prompt_template
+
+## Change Safety Protocol (MANDATORY)
+Before every file edit, state the risk level inline then proceed immediately:
+  Risk: LOW / MEDIUM / HIGH -- <one sentence reason>
+
+Risk guide:
+  LOW    -- docs, comments, README, non-functional text
+  MEDIUM -- logic in one file, new optional param, new file with no existing impact
+  HIGH   -- API/tool signature change, shared service, package.json, CI/CD scripts
+
+After ALL edits are done, provide:
+  1. One-line summary + risk level
+  2. Impact bullets (what changed, what stays the same, side effects)
+  3. How to test -- automated (npm test) + manual steps in Claude CLI
+  4. Test cases table (3 rows: happy path, edge case, failure case)
+
+Then ask the developer: Save to TESTING.md? And shall I commit?
+NEVER run git commit without explicit developer confirmation.
+
+## Memory
+  remember X   -> remember tool
+  recall X     -> recall tool
+  I finished X -> journal tool
+  we decided X -> add_decision tool
+
+# --- End Mobile Team Agent Project Rules ---
