@@ -6,7 +6,7 @@ const path = require('path');
 const os = require('os');
 module.exports = Object.freeze({
   // Version
-  VERSION: '4.0.1',
+  VERSION: '4.0.2',
 
   // File system paths
   CONFIG_DIR: path.join(os.homedir(), '.mobile-team-agent'),
